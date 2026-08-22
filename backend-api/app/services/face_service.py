@@ -1,20 +1,30 @@
-import cv2
-import numpy as np
 from typing import Optional, Tuple, List
 import os
-import struct
-import json
 
 
 class FaceService:
     def __init__(self):
         self.app = None
         self._initialized = False
+        self._np = None
+        self._cv2 = None
+
+    def _ensure_libs(self):
+        if self._np is None:
+            import numpy as np
+            self._np = np
+        if self._cv2 is None:
+            import cv2
+            self._cv2 = cv2
 
     def initialize(self):
         if self._initialized:
             return
         try:
+            import cv2
+            import numpy as np
+            self._cv2 = cv2
+            self._np = np
             from insightface.app import FaceAnalysis
             self.app = FaceAnalysis(
                 name="buffalo_s",
@@ -29,6 +39,9 @@ class FaceService:
 
     def detect_and_embed(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
         self.initialize()
+        self._ensure_libs()
+        np = self._np
+        cv2 = self._cv2
 
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -39,7 +52,9 @@ class FaceService:
             return self._detect_with_insightface(image)
         return self._detect_with_opencv(image)
 
-    def _detect_with_insightface(self, image: np.ndarray) -> Tuple[Optional[List[float]], Optional[dict]]:
+    def _detect_with_insightface(self, image) -> Tuple[Optional[List[float]], Optional[dict]]:
+        cv2 = self._cv2
+        np = self._np
         try:
             faces = self.app.get(image)
             if not faces:
@@ -57,7 +72,9 @@ class FaceService:
             print(f"InsightFace detection error: {e}")
             return None, None
 
-    def _detect_with_opencv(self, image: np.ndarray) -> Tuple[Optional[List[float]], Optional[dict]]:
+    def _detect_with_opencv(self, image) -> Tuple[Optional[List[float]], Optional[dict]]:
+        cv2 = self._cv2
+        np = self._np
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(100, 100))
@@ -75,7 +92,9 @@ class FaceService:
             "quality": 0.80,
         }
 
-    def _compute_quality(self, image: np.ndarray, bbox) -> float:
+    def _compute_quality(self, image, bbox) -> float:
+        cv2 = self._cv2
+        np = self._np
         try:
             x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
             face_region = image[max(0, y1):y2, max(0, x1):x2]
@@ -102,6 +121,8 @@ class FaceService:
         embedding2: List[float],
         threshold: float = 0.4,
     ) -> Tuple[bool, float]:
+        self._ensure_libs()
+        np = self._np
         emb1 = np.array(embedding1)
         emb2 = np.array(embedding2)
 
@@ -128,15 +149,17 @@ class FaceService:
         return None
 
     def save_embedding(self, filepath: str, embedding: List[float]):
+        self._ensure_libs()
         os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)
-        data = np.array(embedding, dtype=np.float32)
+        data = self._np.array(embedding, dtype=np.float32)
         data.tofile(filepath)
 
     def load_embedding(self, filepath: str) -> Optional[List[float]]:
         if not os.path.exists(filepath):
             return None
         try:
-            data = np.fromfile(filepath, dtype=np.float32)
+            self._ensure_libs()
+            data = self._np.fromfile(filepath, dtype=np.float32)
             return data.tolist()
         except Exception:
             return None

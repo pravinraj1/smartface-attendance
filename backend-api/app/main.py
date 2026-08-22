@@ -15,8 +15,6 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     os.makedirs(settings.STORAGE_PATH, exist_ok=True)
-    from app.services.face_service import face_service
-    face_service.initialize()
     yield
     await engine.dispose()
 
