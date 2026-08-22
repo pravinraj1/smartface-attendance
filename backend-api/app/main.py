@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
-from starlette.routing import Match
 import os
 
 from app.core.config import settings
@@ -53,13 +52,13 @@ if os.path.isdir(admin_dist):
     if os.path.isdir(admin_assets):
         app.mount("/assets", StaticFiles(directory=admin_assets), name="admin-assets")
 
-    @app.get("/admin/{full_path:path}")
-    async def serve_admin(full_path: str):
+    SPA_PREFIXES = ("api/", "storage/", "health", "docs", "openapi.json", "redoc")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if full_path.startswith(SPA_PREFIXES):
+            return
         file_path = os.path.join(admin_dist, full_path)
         if full_path and os.path.isfile(file_path):
             return FileResponse(file_path)
-        return FileResponse(os.path.join(admin_dist, "index.html"))
-
-    @app.get("/")
-    async def serve_root():
         return FileResponse(os.path.join(admin_dist, "index.html"))
