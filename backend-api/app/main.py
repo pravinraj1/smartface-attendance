@@ -37,7 +37,7 @@ storage_path = os.path.abspath(settings.STORAGE_PATH)
 if os.path.isdir(storage_path):
     app.mount("/storage", StaticFiles(directory=storage_path), name="storage")
 
-admin_dist = os.path.join(os.path.dirname(__file__), "..", "..", "admin-dist")
+admin_dist = os.path.join(os.path.dirname(__file__), "..", "admin-dist")
 if os.path.isdir(admin_dist):
     app.mount("/admin/assets", StaticFiles(directory=os.path.join(admin_dist, "assets")), name="admin-assets")
 
