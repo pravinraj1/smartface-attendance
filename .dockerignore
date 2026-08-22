@@ -1,0 +1,11 @@
+**/node_modules
+**/venv
+**/__pycache__
+**/.git
+**/build
+**/.dart_tool
+**/*.db
+**/storage/*
+!**/storage/.gitkeep
+**/.env
+**/admin-dist

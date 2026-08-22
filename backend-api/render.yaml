@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: smartface-api
+    runtime: python
+    plan: standard
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: STORAGE_PATH
+        value: /data/storage
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///./data/smartface_attendance.db
+    disk:
+      name: smartface-data
+      mountPath: /data
+      sizeGB: 1

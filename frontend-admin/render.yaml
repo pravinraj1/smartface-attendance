@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: smartface-admin
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://smartface-api.onrender.com/api/*
+      - type: rewrite
+        source: /storage/*
+        destination: https://smartface-api.onrender.com/storage/*

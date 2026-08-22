@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  smartface:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8000"
+    environment:
+      - SECRET_KEY=change-this-to-a-real-secret-in-production
+      - DATABASE_URL=sqlite+aiosqlite:///./data/smartface_attendance.db
+      - STORAGE_PATH=/app/storage
+      - CORS_ORIGINS=["*"]
+    volumes:
+      - smartface-data:/app/data
+      - smartface-storage:/app/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  smartface-data:
+  smartface-storage:

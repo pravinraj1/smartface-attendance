@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend-admin/dist/
+
+# Flutter
+frontend_kiosk/.dart_tool/
+frontend_kiosk/.packages
+frontend_kiosk/build/
+frontend_kiosk/.flutter-plugins
+frontend_kiosk/.flutter-plugins-dependencies
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Storage
+storage/*
+!storage/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
