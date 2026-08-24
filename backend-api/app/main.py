@@ -15,6 +15,22 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     os.makedirs(settings.STORAGE_PATH, exist_ok=True)
+    from app.core.database import async_session
+    from app.models.user import User
+    from app.core.security import get_password_hash
+    from sqlalchemy import select
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.email == "admin@smartface.com"))
+        if not result.scalar_one_or_none():
+            admin = User(
+                email="admin@smartface.com",
+                full_name="Admin",
+                password_hash=get_password_hash("Admin123!"),
+                is_active=True,
+            )
+            session.add(admin)
+            await session.commit()
+            print("Seeded admin user: admin@smartface.com / Admin123!")
     yield
     await engine.dispose()
 
