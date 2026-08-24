@@ -20,7 +20,7 @@ router = APIRouter(prefix="/employees", tags=["Employees"])
 @router.get("", response_model=EmployeeListResponse)
 async def get_employees(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=500),
     search: Optional[str] = None,
     department_id: Optional[str] = None,
     employment_status: Optional[str] = None,
