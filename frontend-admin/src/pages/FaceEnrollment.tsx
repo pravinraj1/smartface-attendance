@@ -1,373 +1,252 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
   Typography,
-  Grid,
-  Paper,
-  TextField,
-  MenuItem,
-  Chip,
   Button,
-  IconButton,
   Card,
   CardContent,
   Stepper,
   Step,
   StepLabel,
+  TextField,
+  MenuItem,
   Alert,
-  CircularProgress,
-  Divider,
-  Avatar,
-  Stack,
+  Grid,
+  Paper,
 } from '@mui/material';
-import {
-  Face as FaceIcon,
-  Delete as DeleteIcon,
-  CloudUpload as UploadIcon,
-  CameraAlt as CameraIcon,
-  CheckCircle as CheckIcon,
-  ArrowBack as BackIcon,
-  ArrowForward as NextIcon,
-  Info as InfoIcon,
-} from '@mui/icons-material';
+import { Face as FaceIcon, CameraAlt as CameraIcon, Check as CheckIcon } from '@mui/icons-material';
 import { employeeAPI, faceAPI } from '../services/api';
-import CameraCapture from '../components/CameraCapture';
 
 interface Employee {
   id: string;
   employee_code: string;
   full_name: string;
   face_enrolled: boolean;
-  department_id: string;
 }
 
-interface FaceProfile {
-  id: string;
-  employee_id: string;
-  face_image_url: string;
-  created_at: string;
-  is_primary: boolean;
-}
-
-const steps = ['Select Employee', 'Capture Face', 'Preview', 'Done'];
+const steps = ['Select Employee', 'Capture Face', 'Confirm Enrollment'];
 
 export default function FaceEnrollment() {
   const [activeStep, setActiveStep] = useState(0);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
-  const [capturedFile, setCapturedFile] = useState<File | null>(null);
-  const [capturedPreview, setCapturedPreview] = useState<string>('');
-  const [successMessage, setSuccessMessage] = useState('');
-  const [duplicateWarning, setDuplicateWarning] = useState<string>('');
-  const [duplicateChecking, setDuplicateChecking] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [duplicateWarning, setDuplicateWarning] = useState('');
   const queryClient = useQueryClient();
 
-  const { data: employeesData, isLoading: employeesLoading } = useQuery({
+  const { data: employeesData } = useQuery({
     queryKey: ['employees'],
-    queryFn: () => employeeAPI.getAll({ limit: 200 }).then((res) => res.data),
+    queryFn: () => employeeAPI.getAll().then((res) => res.data),
   });
 
-  const { data: faceProfiles, isLoading: facesLoading } = useQuery({
-    queryKey: ['faceProfiles', selectedEmployeeId],
-    queryFn: () => faceAPI.getEmployeeFaces(selectedEmployeeId).then((res) => res.data),
-    enabled: !!selectedEmployeeId,
-  });
+  const employees = (employeesData?.employees || []).filter((e: Employee) => !e.face_enrolled);
 
-  const enrollMutation = useMutation({
-    mutationFn: ({ employeeId, file }: { employeeId: string; file: File }) =>
-      faceAPI.enroll(employeeId, file),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['faceProfiles'] });
-      queryClient.invalidateQueries({ queryKey: ['employees'] });
-      setActiveStep(3);
-      setSuccessMessage('Face enrolled successfully!');
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (faceId: string) => faceAPI.delete(faceId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['faceProfiles'] });
-      queryClient.invalidateQueries({ queryKey: ['employees'] });
-    },
-  });
-
-  const employees: Employee[] = employeesData?.employees || [];
-  const enrolledCount = employees.filter((e) => e.face_enrolled).length;
-  const totalCount = employees.length;
-
-  const sortedEmployees = [...employees].sort((a, b) => {
-    if (a.face_enrolled === b.face_enrolled) return 0;
-    return a.face_enrolled ? 1 : -1;
-  });
-
-  const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId);
-
-  const checkForDuplicate = async (file: File) => {
-    setDuplicateChecking(true);
-    setDuplicateWarning('');
-    try {
-      const res = await faceAPI.checkDuplicate(file, selectedEmployeeId);
-      if (res.data.duplicate) {
-        setDuplicateWarning(res.data.message);
-      }
-    } catch {
-    } finally {
-      setDuplicateChecking(false);
-    }
-  };
-
-  const handleCapture = (blob: Blob) => {
-    const file = new File([blob], `face-${Date.now()}.jpg`, { type: 'image/jpeg' });
-    setCapturedFile(file);
-    setCapturedPreview(URL.createObjectURL(blob));
-    setDuplicateWarning('');
-    setActiveStep(2);
-    checkForDuplicate(file);
-  };
-
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const handleCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
     if (file) {
-      setCapturedFile(file);
-      setCapturedPreview(URL.createObjectURL(file));
-      setDuplicateWarning('');
+      const reader = new FileReader();
+      reader.onloadend = () => setCapturedImage(reader.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleNext = async () => {
+    setError('');
+    setDuplicateWarning('');
+
+    if (activeStep === 0) {
+      if (!selectedEmployeeId) { setError('Please select an employee'); return; }
+      // Check for duplicate face
+      if (capturedImage) {
+        try {
+          const resp = await fetch('/api/v1/faces/check-duplicate', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${localStorage.getItem('access_token')}`,
+            },
+            body: JSON.stringify({
+              image: capturedImage,
+              exclude_employee_id: selectedEmployeeId,
+            }),
+          });
+          const data = await resp.json();
+          if (data.is_duplicate) {
+            setDuplicateWarning(`This face is already enrolled for: ${data.existing_employee_name} (${data.existing_employee_code}). Cannot enroll the same face for multiple employees.`);
+            return;
+          }
+        } catch (err) { /* proceed if check fails */ }
+      }
+      setActiveStep(1);
+    } else if (activeStep === 1) {
+      if (!capturedImage) { setError('Please capture a photo'); return; }
+      // Check duplicate again before enrollment
+      try {
+        const resp = await fetch('/api/v1/faces/check-duplicate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${localStorage.getItem('access_token')}`,
+          },
+          body: JSON.stringify({
+            image: capturedImage,
+            exclude_employee_id: selectedEmployeeId,
+          }),
+        });
+        const data = await resp.json();
+        if (data.is_duplicate) {
+          setDuplicateWarning(`This face is already enrolled for: ${data.existing_employee_name} (${data.existing_employee_code}).`);
+          return;
+        }
+      } catch (err) { /* proceed */ }
       setActiveStep(2);
-      checkForDuplicate(file);
     }
   };
 
-  const handleEnroll = () => {
-    if (capturedFile && selectedEmployeeId) {
-      enrollMutation.mutate({ employeeId: selectedEmployeeId, file: capturedFile });
-    }
-  };
-
-  const handleRetake = () => {
-    setCapturedFile(null);
-    setCapturedPreview('');
-    setDuplicateWarning('');
-    setActiveStep(1);
-  };
-
-  const handleReset = () => {
-    setActiveStep(0);
-    setSelectedEmployeeId('');
-    setCapturedFile(null);
-    setCapturedPreview('');
-    setSuccessMessage('');
-    setDuplicateWarning('');
-  };
-
-  const handleDeleteFace = (faceId: string) => {
-    if (window.confirm('Delete this face profile?')) {
-      deleteMutation.mutate(faceId);
+  const handleEnroll = async () => {
+    setError('');
+    try {
+      await faceAPI.enroll(selectedEmployeeId, capturedImage!);
+      setSuccess('Face enrolled successfully!');
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+      setTimeout(() => {
+        setActiveStep(0);
+        setSelectedEmployeeId('');
+        setCapturedImage(null);
+        setSuccess('');
+      }, 2000);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Enrollment failed');
     }
   };
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Face Enrollment</Typography>
-        <Chip
-          icon={<FaceIcon />}
-          label={`${enrolledCount} / ${totalCount} Enrolled`}
-          color={enrolledCount === totalCount ? 'success' : 'primary'}
-          variant="outlined"
-        />
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ mb: 0.5 }}>Face Enrollment</Typography>
+        <Typography variant="body2" sx={{ color: '#718096' }}>
+          Register employee faces for biometric attendance
+        </Typography>
       </Box>
 
-      <Stepper activeStep={activeStep} sx={{ mb: 4 }}>
-        {steps.map((label) => (
-          <Step key={label}>
-            <StepLabel>{label}</StepLabel>
-          </Step>
-        ))}
-      </Stepper>
+      <Card sx={{ mb: 3 }}>
+        <CardContent sx={{ p: 3 }}>
+          <Stepper activeStep={activeStep} alternativeLabel>
+            {steps.map((label) => (
+              <Step key={label}>
+                <StepLabel>{label}</StepLabel>
+              </Step>
+            ))}
+          </Stepper>
+        </CardContent>
+      </Card>
 
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 2, mb: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Select Employee
-            </Typography>
-            <TextField
-              select
-              fullWidth
-              size="small"
-              label="Employee"
-              value={selectedEmployeeId}
-              onChange={(e) => {
-                setSelectedEmployeeId(e.target.value);
-                if (activeStep === 0) setActiveStep(1);
-              }}
-              disabled={employeesLoading}
-            >
-              {sortedEmployees.map((emp) => (
-                <MenuItem
-                  key={emp.id}
-                  value={emp.id}
-                  sx={{ opacity: emp.face_enrolled ? 0.5 : 1 }}
-                >
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                    <span>{emp.full_name}</span>
-                    {emp.face_enrolled && (
-                      <Chip label="Enrolled" size="small" color="success" sx={{ ml: 1 }} />
-                    )}
-                  </Box>
-                </MenuItem>
-              ))}
-            </TextField>
-          </Paper>
+      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 1 }}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mb: 2, borderRadius: 1 }}>{success}</Alert>}
+      {duplicateWarning && <Alert severity="warning" sx={{ mb: 2, borderRadius: 1 }}>{duplicateWarning}</Alert>}
 
-          {selectedEmployeeId && (
-            <Paper sx={{ p: 2, mb: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                Existing Face Profiles
-              </Typography>
-              {facesLoading ? (
-                <CircularProgress size={24} />
-              ) : faceProfiles?.length > 0 ? (
-                <Grid container spacing={1}>
-                  {faceProfiles.map((face: FaceProfile) => (
-                    <Grid item xs={4} key={face.id}>
-                      <Card variant="outlined" sx={{ position: 'relative' }}>
-                        <Avatar
-                          src={face.face_image_url}
-                          variant="rounded"
-                          sx={{ width: '100%', height: 80 }}
-                        />
-                        <IconButton
-                          size="small"
-                          sx={{ position: 'absolute', top: 2, right: 2, bgcolor: 'rgba(0,0,0,0.5)' }}
-                          onClick={() => handleDeleteFace(face.id)}
-                        >
-                          <DeleteIcon sx={{ fontSize: 16, color: '#fff' }} />
-                        </IconButton>
-                      </Card>
-                    </Grid>
-                  ))}
-                </Grid>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  No face profiles enrolled yet.
-                </Typography>
+      <Card>
+        <CardContent sx={{ p: 3 }}>
+          {activeStep === 0 && (
+            <Box>
+              <Typography variant="h6" sx={{ mb: 2 }}>Select Employee</Typography>
+              <TextField
+                select
+                fullWidth
+                label="Choose an employee to enroll"
+                value={selectedEmployeeId}
+                onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                size="small"
+              >
+                {employees.map((emp: Employee) => (
+                  <MenuItem key={emp.id} value={emp.id}>
+                    {emp.employee_code} - {emp.full_name}
+                  </MenuItem>
+                ))}
+              </TextField>
+              {employees.length === 0 && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  All employees have been enrolled, or no employees exist yet.
+                </Alert>
               )}
-            </Paper>
+            </Box>
           )}
 
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                <InfoIcon sx={{ mr: 1, color: 'info.main' }} />
-                <Typography variant="subtitle2">Enrollment Guidelines</Typography>
-              </Box>
-              <Divider sx={{ mb: 1 }} />
-              <Typography variant="body2" color="text.secondary" component="div">
-                <ul style={{ margin: 0, paddingLeft: 20 }}>
-                  <li>Ensure good lighting</li>
-                  <li>Face the camera directly</li>
-                  <li>Remove glasses or headwear</li>
-                  <li>Keep a neutral expression</li>
-                  <li>Ensure face is clearly visible</li>
-                </ul>
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} md={8}>
-          <Paper sx={{ p: 2, minHeight: 400, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            {activeStep === 0 && (
-              <Box sx={{ textAlign: 'center' }}>
-                <FaceIcon sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
-                <Typography variant="h6" color="text.secondary">
-                  Select an employee to begin enrollment
-                </Typography>
-              </Box>
-            )}
-
-            {activeStep === 1 && selectedEmployeeId && (
-              <Box sx={{ width: '100%' }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                  <Typography variant="h6">
-                    Capture face for {selectedEmployee?.full_name}
-                  </Typography>
-                  <Button startIcon={<UploadIcon />} onClick={() => fileInputRef.current?.click()}>
-                    Upload Image
-                  </Button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    hidden
-                    onChange={handleFileUpload}
-                  />
-                </Box>
-                <CameraCapture onCapture={handleCapture} />
-              </Box>
-            )}
-
-            {activeStep === 2 && (
-              <Box sx={{ textAlign: 'center', width: '100%' }}>
-                <Typography variant="h6" gutterBottom>
-                  Preview - {selectedEmployee?.full_name}
-                </Typography>
-                <Box
-                  component="img"
-                  src={capturedPreview}
-                  alt="Captured face"
-                  sx={{ maxWidth: '100%', maxHeight: 400, borderRadius: 2, mb: 2 }}
-                />
-                {duplicateChecking && (
-                  <Alert severity="info" sx={{ mb: 2 }}>
-                    Checking if this face is already enrolled...
-                  </Alert>
-                )}
-                {duplicateWarning && (
-                  <Alert severity="warning" sx={{ mb: 2 }}>
-                    {duplicateWarning}
-                  </Alert>
-                )}
-                {enrollMutation.isError && (
-                  <Alert severity="error" sx={{ mb: 2 }}>
-                    {(enrollMutation.error as any)?.response?.data?.detail || 'Enrollment failed. Ensure the face is clearly visible and try again.'}
-                  </Alert>
-                )}
-                <Stack direction="row" spacing={2} justifyContent="center">
-                  <Button variant="outlined" startIcon={<BackIcon />} onClick={handleRetake}>
-                    Retake
-                  </Button>
-                  <Button
-                    variant="contained"
-                    startIcon={enrollMutation.isPending ? <CircularProgress size={20} /> : <CheckIcon />}
-                    onClick={handleEnroll}
-                    disabled={enrollMutation.isPending}
+          {activeStep === 1 && (
+            <Box>
+              <Typography variant="h6" sx={{ mb: 2 }}>Capture Face Photo</Typography>
+              <Grid container spacing={2} alignItems="center">
+                <Grid item xs={12} md={6}>
+                  <Paper
+                    sx={{
+                      height: 300,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: '#f7fafc',
+                      border: '2px dashed #e2e8f0',
+                      borderRadius: 2,
+                    }}
                   >
-                    Enroll Face
+                    {capturedImage ? (
+                      <img src={capturedImage} alt="Captured" style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 8 }} />
+                    ) : (
+                      <>
+                        <CameraIcon sx={{ fontSize: 48, color: '#cbd5e0', mb: 1 }} />
+                        <Typography variant="body2" sx={{ color: '#a0aec0' }}>
+                          Take a clear, front-facing photo
+                        </Typography>
+                      </>
+                    )}
+                  </Paper>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Button variant="contained" component="label" startIcon={<CameraIcon />}>
+                    {capturedImage ? 'Retake Photo' : 'Take Photo'}
+                    <input type="file" accept="image/*" capture="user" hidden onChange={handleCapture} />
                   </Button>
-                </Stack>
-              </Box>
-            )}
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    Use a clear, well-lit photo. Face should be centered and looking at the camera.
+                  </Alert>
+                </Grid>
+              </Grid>
+            </Box>
+          )}
 
-            {activeStep === 3 && (
-              <Box sx={{ textAlign: 'center' }}>
-                <CheckIcon sx={{ fontSize: 80, color: 'success.main', mb: 2 }} />
-                <Typography variant="h5" gutterBottom>
-                  {successMessage}
-                </Typography>
-                <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-                  Face profile for {selectedEmployee?.full_name} has been enrolled.
-                </Typography>
-                <Button variant="contained" onClick={handleReset}>
-                  Enroll Another Employee
-                </Button>
-              </Box>
+          {activeStep === 2 && (
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="h6" sx={{ mb: 2 }}>Confirm Enrollment</Typography>
+              {capturedImage && (
+                <Box sx={{ mb: 2 }}>
+                  <img src={capturedImage} alt="To enroll" style={{ maxWidth: 300, borderRadius: 8, border: '1px solid #e2e8f0' }} />
+                </Box>
+              )}
+              <Typography variant="body2" sx={{ color: '#718096', mb: 2 }}>
+                Ready to enroll this face for the selected employee.
+              </Typography>
+              <Button variant="contained" startIcon={<CheckIcon />} onClick={handleEnroll} size="large">
+                Confirm & Enroll
+              </Button>
+            </Box>
+          )}
+
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 3 }}>
+            {activeStep > 0 && activeStep < 2 && (
+              <Button onClick={() => setActiveStep(activeStep - 1)} sx={{ mr: 1 }}>
+                Back
+              </Button>
             )}
-          </Paper>
-        </Grid>
-      </Grid>
+            {activeStep < 2 && (
+              <Button variant="contained" onClick={handleNext} disabled={activeStep === 0 && !selectedEmployeeId}>
+                Next
+              </Button>
+            )}
+          </Box>
+        </CardContent>
+      </Card>
     </Box>
   );
 }

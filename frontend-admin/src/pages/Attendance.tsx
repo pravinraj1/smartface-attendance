@@ -9,126 +9,110 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Paper,
   TextField,
   MenuItem,
   Chip,
+  Grid,
+  Card,
+  CardContent,
+  InputAdornment,
 } from '@mui/material';
-import { attendanceAPI, employeeAPI } from '../services/api';
+import { Search as SearchIcon, CheckCircle, Cancel, AccessTime } from '@mui/icons-material';
+import { attendanceAPI } from '../services/api';
 
 interface AttendanceRecord {
   id: string;
-  employee_id: string;
-  attendance_date: string;
-  check_in: string;
-  check_out: string;
-  total_work_minutes: number;
-  attendance_status: string;
-}
-
-interface Employee {
-  id: string;
-  full_name: string;
+  employee_name: string;
   employee_code: string;
+  date: string;
+  check_in: string;
+  check_out: string | null;
+  status: string;
+  total_hours: number | null;
 }
 
 export default function Attendance() {
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
-  const { data: attendance, isLoading } = useQuery({
-    queryKey: ['attendance', startDate, endDate, employeeId],
-    queryFn: () =>
-      attendanceAPI
-        .getAll({
-          start_date: startDate || undefined,
-          end_date: endDate || undefined,
-          employee_id: employeeId || undefined,
-        })
-        .then((res) => res.data),
+  const { data: attendanceData, isLoading } = useQuery({
+    queryKey: ['attendance'],
+    queryFn: () => attendanceAPI.getAll().then((res) => res.data),
   });
 
-  const { data: employees } = useQuery({
-    queryKey: ['employees'],
-    queryFn: () => employeeAPI.getAll().then((res) => res.data),
+  const records = attendanceData?.attendance || [];
+  const filtered = records.filter((r: AttendanceRecord) => {
+    const matchSearch = r.employee_name?.toLowerCase().includes(search.toLowerCase()) ||
+      r.employee_code?.toLowerCase().includes(search.toLowerCase());
+    const matchStatus = statusFilter === 'all' || r.status === statusFilter;
+    return matchSearch && matchStatus;
   });
 
-  const formatTime = (timestamp: string) => {
-    if (!timestamp) return '-';
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  const formatMinutes = (minutes: number) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
-  };
-
-  const getStatusColor = (status: string) => {
+  const getStatusConfig = (status: string) => {
     switch (status) {
-      case 'PRESENT':
-        return 'success';
-      case 'LATE':
-        return 'warning';
-      case 'ABSENT':
-        return 'error';
-      case 'HALF_DAY':
-        return 'info';
-      default:
-        return 'default';
+      case 'PRESENT': return { icon: <CheckCircle sx={{ fontSize: 14 }} />, bg: '#f0fff4', color: '#2f855a' };
+      case 'ABSENT': return { icon: <Cancel sx={{ fontSize: 14 }} />, bg: '#fff5f5', color: '#c53030' };
+      case 'LATE': return { icon: <AccessTime sx={{ fontSize: 14 }} />, bg: '#fffaf0', color: '#c05621' };
+      case 'HALF_DAY': return { icon: <AccessTime sx={{ fontSize: 14 }} />, bg: '#fffff0', color: '#975a16' };
+      default: return { icon: null, bg: '#f7fafc', color: '#4a5568' };
     }
   };
 
+  if (isLoading) {
+    return <Typography>Loading...</Typography>;
+  }
+
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Attendance
-      </Typography>
-
-      <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-        <TextField
-          label="Start Date"
-          type="date"
-          size="small"
-          InputLabelProps={{ shrink: true }}
-          value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
-        />
-        <TextField
-          label="End Date"
-          type="date"
-          size="small"
-          InputLabelProps={{ shrink: true }}
-          value={endDate}
-          onChange={(e) => setEndDate(e.target.value)}
-        />
-        <TextField
-          label="Employee"
-          size="small"
-          select
-          sx={{ minWidth: 200 }}
-          value={employeeId}
-          onChange={(e) => setEmployeeId(e.target.value)}
-        >
-          <MenuItem value="">All Employees</MenuItem>
-          {employees?.employees?.map((emp: Employee) => (
-            <MenuItem key={emp.id} value={emp.id}>
-              {emp.full_name}
-            </MenuItem>
-          ))}
-        </TextField>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ mb: 0.5 }}>Attendance</Typography>
+        <Typography variant="body2" sx={{ color: '#718096' }}>
+          {records.length} total attendance records
+        </Typography>
       </Box>
 
-      <TableContainer component={Paper}>
+      <Card sx={{ mb: 2.5 }}>
+        <CardContent sx={{ py: 2, px: 2.5 }}>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} md={6}>
+              <TextField
+                size="small"
+                placeholder="Search by name or code..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                fullWidth
+                InputProps={{
+                  startAdornment: <InputAdornment position="start"><SearchIcon sx={{ color: '#a0aec0' }} /></InputAdornment>,
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                size="small"
+                select
+                fullWidth
+                label="Status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <MenuItem value="all">All Status</MenuItem>
+                <MenuItem value="PRESENT">Present</MenuItem>
+                <MenuItem value="ABSENT">Absent</MenuItem>
+                <MenuItem value="LATE">Late</MenuItem>
+                <MenuItem value="HALF_DAY">Half Day</MenuItem>
+              </TextField>
+            </Grid>
+          </Grid>
+        </CardContent>
+      </Card>
+
+      <TableContainer>
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Date</TableCell>
+              <TableCell>Code</TableCell>
               <TableCell>Employee</TableCell>
+              <TableCell>Date</TableCell>
               <TableCell>Check In</TableCell>
               <TableCell>Check Out</TableCell>
               <TableCell>Hours</TableCell>
@@ -136,41 +120,52 @@ export default function Attendance() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={6} align="center">
-                  Loading...
-                </TableCell>
-              </TableRow>
-            ) : attendance?.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} align="center">
-                  No attendance records found
-                </TableCell>
-              </TableRow>
-            ) : (
-              attendance?.map((record: AttendanceRecord) => {
-                const employee = employees?.employees?.find(
-                  (e: Employee) => e.id === record.employee_id
-                );
-                return (
-                  <TableRow key={record.id}>
-                    <TableCell>{record.attendance_date}</TableCell>
-                    <TableCell>{employee?.full_name || '-'}</TableCell>
-                    <TableCell>{formatTime(record.check_in)}</TableCell>
-                    <TableCell>{formatTime(record.check_out)}</TableCell>
-                    <TableCell>{formatMinutes(record.total_work_minutes)}</TableCell>
-                    <TableCell>
-                      <Chip
-                        label={record.attendance_status}
-                        color={getStatusColor(record.attendance_status) as any}
-                        size="small"
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            )}
+            {filtered.map((record: AttendanceRecord) => {
+              const st = getStatusConfig(record.status);
+              return (
+                <TableRow key={record.id} hover>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: 600, fontFamily: 'monospace' }}>
+                      {record.employee_code}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {record.employee_name}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>{record.date}</TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {record.check_in ? new Date(record.check_in).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : '-'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ color: record.check_out ? 'inherit' : '#a0aec0' }}>
+                      {record.check_out ? new Date(record.check_out).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {record.total_hours ? `${record.total_hours.toFixed(1)}h` : '-'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      icon={st.icon}
+                      label={record.status}
+                      size="small"
+                      sx={{
+                        backgroundColor: st.bg,
+                        color: st.color,
+                        fontWeight: 600,
+                        fontSize: '0.7rem',
+                      }}
+                    />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </TableContainer>

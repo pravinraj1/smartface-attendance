@@ -1,499 +1,335 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
   Typography,
+  Tabs,
+  Tab,
   Card,
   CardContent,
   TextField,
   Button,
   Grid,
-  Switch,
-  FormControlLabel,
   Alert,
-  CircularProgress,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Paper,
-  Tabs,
-  Tab,
   Chip,
+  MenuItem,
+  Switch,
+  FormControlLabel,
+  Divider,
 } from '@mui/material';
 import {
-  Sync as SyncIcon,
-  CloudDownload as DownloadIcon,
-  Webhook as WebhookIcon,
   Settings as SettingsIcon,
+  Sync as SyncIcon,
+  Webhook as WebhookIcon,
+  History as HistoryIcon,
+  CloudUpload as CloudUploadIcon,
 } from '@mui/icons-material';
-import api from '../services/api';
+import { erpAPI } from '../services/api';
 
-interface ERPConfig {
-  configured: boolean;
-  id?: string;
-  erp_name?: string;
-  erp_url?: string;
-  auth_type?: string;
-  data_format?: string;
-  sync_enabled?: boolean;
-  sync_interval_minutes?: number;
-  last_sync_at?: string;
-  last_sync_status?: string;
-  webhook_enabled?: boolean;
-  endpoint_attendance?: string;
-  endpoint_employees?: string;
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
 }
 
-interface SyncLog {
-  id: string;
-  sync_type: string;
-  direction: string;
-  status: string;
-  records_count: number;
-  error_message?: string;
-  started_at?: string;
-  completed_at?: string;
+function TabPanel({ children, value, index }: TabPanelProps) {
+  return value === index ? <Box sx={{ py: 3 }}>{children}</Box> : null;
 }
 
 export default function ERPIntegration() {
   const [tab, setTab] = useState(0);
-  const [config, setConfig] = useState<ERPConfig>({ configured: false });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [pushing, setPushing] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [configForm, setConfigForm] = useState({
+    erp_base_url: '',
+    erp_api_key: '',
+    export_format: 'xml',
+    push_enabled: false,
+    push_endpoint: '',
+    push_auth_header: '',
+    webhook_enabled: false,
+    webhook_url: '',
+    webhook_secret: '',
+  });
+  const [exportResult, setExportResult] = useState<any>(null);
+  const [pushResult, setPushResult] = useState<any>(null);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    loadConfig();
-    loadSyncLogs();
-  }, []);
+  const { data: config, isLoading: loadingConfig } = useQuery({
+    queryKey: ['erpConfig'],
+    queryFn: () => erpAPI.getConfig().then((res) => res.data),
+  });
 
-  const loadConfig = async () => {
-    try {
-      const res = await api.get('/erp/config');
-      if (res.data.configured) {
-        setConfig(res.data);
-      }
-    } catch (e) {
-      console.error('Failed to load ERP config');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data: logsData, isLoading: loadingLogs } = useQuery({
+    queryKey: ['erpSyncLogs'],
+    queryFn: () => erpAPI.getSyncLogs().then((res) => res.data),
+  });
 
-  const loadSyncLogs = async () => {
-    try {
-      const res = await api.get('/erp/sync-logs?limit=20');
-      setSyncLogs(res.data);
-    } catch (e) {
-      console.error('Failed to load sync logs');
-    }
-  };
+  const configMutation = useMutation({
+    mutationFn: (data: any) => erpAPI.updateConfig(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['erpConfig'] }),
+  });
 
-  const saveConfig = async () => {
-    setSaving(true);
-    setMessage(null);
-    try {
-      const params = new URLSearchParams();
-      params.append('erp_name', config.erp_name || 'Custom ERP');
-      params.append('erp_url', config.erp_url || '');
-      params.append('api_key', (config as any).api_key || '');
-      params.append('auth_type', config.auth_type || 'api_key');
-      params.append('data_format', config.data_format || 'xml');
-      params.append('sync_enabled', String(config.sync_enabled ?? true));
-      params.append('sync_interval_minutes', String(config.sync_interval_minutes || 15));
-      params.append('endpoint_attendance', config.endpoint_attendance || '');
-      params.append('endpoint_employees', config.endpoint_employees || '');
-      params.append('webhook_url', (config as any).webhook_url || '');
-      params.append('webhook_secret', (config as any).webhook_secret || '');
-      params.append('webhook_enabled', String(config.webhook_enabled ?? false));
+  const exportMutation = useMutation({
+    mutationFn: (params: any) => erpAPI.exportAttendance(params).then((res) => res.data),
+    onSuccess: (data) => setExportResult(data),
+  });
 
-      await api.post('/erp/config', params, {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  const pushMutation = useMutation({
+    mutationFn: () => erpAPI.pushAttendance().then((res) => res.data),
+    onSuccess: (data) => setPushResult(data),
+  });
+
+  const webhookTestMutation = useMutation({
+    mutationFn: () => erpAPI.testWebhook().then((res) => res.data),
+  });
+
+  React.useEffect(() => {
+    if (config) {
+      setConfigForm({
+        erp_base_url: config.erp_base_url || '',
+        erp_api_key: config.erp_api_key || '',
+        export_format: config.export_format || 'xml',
+        push_enabled: config.push_enabled || false,
+        push_endpoint: config.push_endpoint || '',
+        push_auth_header: config.push_auth_header || '',
+        webhook_enabled: config.webhook_enabled || false,
+        webhook_url: config.webhook_url || '',
+        webhook_secret: config.webhook_secret || '',
       });
-      setMessage({ type: 'success', text: 'ERP configuration saved successfully' });
-      loadConfig();
-    } catch (e: any) {
-      setMessage({ type: 'error', text: e.response?.data?.detail || 'Failed to save config' });
-    } finally {
-      setSaving(false);
+    }
+  }, [config]);
+
+  const handleSaveConfig = () => {
+    configMutation.mutate(configForm);
+  };
+
+  const handleExport = (type: string) => {
+    exportMutation.mutate({
+      export_type: type,
+      start_date: new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0],
+      end_date: new Date().toISOString().split('T')[0],
+      format: configForm.export_format,
+    });
+  };
+
+  const getLogStatusColor = (status: string) => {
+    switch (status) {
+      case 'SUCCESS': return { bg: '#f0fff4', color: '#2f855a' };
+      case 'FAILED': return { bg: '#fff5f5', color: '#c53030' };
+      case 'PARTIAL': return { bg: '#fffaf0', color: '#c05621' };
+      default: return { bg: '#f7fafc', color: '#4a5568' };
     }
   };
 
-  const pushAttendance = async () => {
-    setPushing(true);
-    setMessage(null);
-    try {
-      const params = new URLSearchParams();
-      if (startDate) params.append('start_date', startDate);
-      if (endDate) params.append('end_date', endDate);
-
-      const res = await api.post('/erp/push/attendance?' + params.toString());
-      if (res.data.success) {
-        setMessage({ type: 'success', text: `Pushed ${res.data.records_pushed} records to ERP` });
-      } else {
-        setMessage({ type: 'error', text: `Push failed: ${res.data.response}` });
-      }
-      loadSyncLogs();
-    } catch (e: any) {
-      setMessage({ type: 'error', text: e.response?.data?.detail || 'Push failed' });
-    } finally {
-      setPushing(false);
-    }
-  };
-
-  const downloadExport = (type: 'attendance' | 'employees', format: 'xml' | 'json') => {
-    const token = localStorage.getItem('access_token');
-    const params = new URLSearchParams({ format });
-    if (startDate && type === 'attendance') params.append('start_date', startDate);
-    if (endDate && type === 'attendance') params.append('end_date', endDate);
-
-    window.open(
-      `${api.defaults.baseURL}/erp/export/${type}?${params.toString()}`,
-      '_blank'
-    );
-  };
-
-  const testWebhook = async () => {
-    setMessage(null);
-    try {
-      const res = await api.post('/erp/webhook/test');
-      if (res.data.success) {
-        setMessage({ type: 'success', text: 'Webhook test successful' });
-      } else {
-        setMessage({ type: 'error', text: 'Webhook test failed' });
-      }
-    } catch (e: any) {
-      setMessage({ type: 'error', text: e.response?.data?.detail || 'Webhook test failed' });
-    }
-  };
-
-  if (loading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <CircularProgress />
-      </Box>
-    );
-  }
+  const logs = logsData?.logs || [];
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        ERP Integration
-      </Typography>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ mb: 0.5 }}>ERP Integration</Typography>
+        <Typography variant="body2" sx={{ color: '#718096' }}>
+          Configure and manage your ERP system integration
+        </Typography>
+      </Box>
 
-      {message && (
-        <Alert severity={message.type} sx={{ mb: 2 }} onClose={() => setMessage(null)}>
-          {message.text}
-        </Alert>
-      )}
+      <Card>
+        <CardContent sx={{ p: 0 }}>
+          <Tabs
+            value={tab}
+            onChange={(_, v) => setTab(v)}
+            sx={{ borderBottom: 1, borderColor: '#e2e8f0', px: 2 }}
+          >
+            <Tab icon={<SettingsIcon />} iconPosition="start" label="Configuration" />
+            <Tab icon={<SyncIcon />} iconPosition="start" label="Export & Push" />
+            <Tab icon={<WebhookIcon />} iconPosition="start" label="Webhooks" />
+            <Tab icon={<HistoryIcon />} iconPosition="start" label="Sync Logs" />
+          </Tabs>
 
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 3 }}>
-        <Tab icon={<SettingsIcon />} label="Configuration" />
-        <Tab icon={<SyncIcon />} label="Export & Push" />
-        <Tab icon={<WebhookIcon />} label="Webhooks" />
-        <Tab icon={<DownloadIcon />} label="Sync Logs" />
-      </Tabs>
+          {/* Configuration Tab */}
+          <TabPanel value={tab} index={0}>
+            <Box sx={{ px: 3 }}>
+              <Typography variant="h6" sx={{ mb: 2 }}>ERP Server Configuration</Typography>
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <TextField fullWidth size="small" label="ERP Base URL" placeholder="https://your-erp.com/api" value={configForm.erp_base_url} onChange={(e) => setConfigForm({ ...configForm, erp_base_url: e.target.value })} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField fullWidth size="small" label="API Key" value={configForm.erp_api_key} onChange={(e) => setConfigForm({ ...configForm, erp_api_key: e.target.value })} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField fullWidth size="small" select label="Export Format" value={configForm.export_format} onChange={(e) => setConfigForm({ ...configForm, export_format: e.target.value })}>
+                    <MenuItem value="xml">XML</MenuItem>
+                    <MenuItem value="json">JSON</MenuItem>
+                  </TextField>
+                </Grid>
+              </Grid>
 
-      {tab === 0 && (
-        <Card>
-          <CardContent>
-            <Typography variant="h6" gutterBottom>
-              ERP Connection Settings
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="ERP Name"
-                  value={config.erp_name || ''}
-                  onChange={(e) => setConfig({ ...config, erp_name: e.target.value })}
-                />
+              <Divider sx={{ my: 3 }} />
+
+              <Typography variant="h6" sx={{ mb: 2 }}>Push Configuration</Typography>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <FormControlLabel control={<Switch checked={configForm.push_enabled} onChange={(e) => setConfigForm({ ...configForm, push_enabled: e.target.checked })} />} label="Enable auto-push to ERP" />
+                </Grid>
+                {configForm.push_enabled && (
+                  <>
+                    <Grid item xs={12} md={8}>
+                      <TextField fullWidth size="small" label="Push Endpoint" placeholder="https://your-erp.com/api/attendance/import" value={configForm.push_endpoint} onChange={(e) => setConfigForm({ ...configForm, push_endpoint: e.target.value })} />
+                    </Grid>
+                    <Grid item xs={12} md={4}>
+                      <TextField fullWidth size="small" label="Auth Header" placeholder="Bearer token..." value={configForm.push_auth_header} onChange={(e) => setConfigForm({ ...configForm, push_auth_header: e.target.value })} />
+                    </Grid>
+                  </>
+                )}
               </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="ERP URL"
-                  value={config.erp_url || ''}
-                  onChange={(e) => setConfig({ ...config, erp_url: e.target.value })}
-                  placeholder="https://your-erp.com/api"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="API Key"
-                  value={(config as any).api_key || ''}
-                  onChange={(e) => setConfig({ ...config, api_key: e.target.value } as any)}
-                  type="password"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Data Format"
-                  select
-                  value={config.data_format || 'xml'}
-                  onChange={(e) => setConfig({ ...config, data_format: e.target.value })}
-                >
-                  <option value="xml">XML</option>
-                  <option value="json">JSON</option>
-                </TextField>
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Attendance Endpoint"
-                  value={config.endpoint_attendance || ''}
-                  onChange={(e) => setConfig({ ...config, endpoint_attendance: e.target.value })}
-                  placeholder="https://your-erp.com/api/attendance"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Employees Endpoint"
-                  value={config.endpoint_employees || ''}
-                  onChange={(e) => setConfig({ ...config, endpoint_employees: e.target.value })}
-                  placeholder="https://your-erp.com/api/employees"
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={config.sync_enabled ?? true}
-                      onChange={(e) => setConfig({ ...config, sync_enabled: e.target.checked })}
-                    />
-                  }
-                  label="Enable Auto Sync"
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <Button variant="contained" onClick={saveConfig} disabled={saving}>
-                  {saving ? <CircularProgress size={20} /> : 'Save Configuration'}
+
+              <Box sx={{ mt: 3 }}>
+                <Button variant="contained" onClick={handleSaveConfig} disabled={configMutation.isPending}>
+                  {configMutation.isPending ? 'Saving...' : 'Save Configuration'}
                 </Button>
-              </Grid>
-            </Grid>
-
-            {config.last_sync_at && (
-              <Alert severity={config.last_sync_status === 'success' ? 'success' : 'info'} sx={{ mt: 2 }}>
-                Last sync: {new Date(config.last_sync_at).toLocaleString()} — {config.last_sync_status}
-              </Alert>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === 1 && (
-        <Card>
-          <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Export & Push Data
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Start Date"
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="End Date"
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <Box display="flex" gap={2} flexWrap="wrap">
-                  <Button
-                    variant="contained"
-                    startIcon={<SyncIcon />}
-                    onClick={pushAttendance}
-                    disabled={pushing || !config.endpoint_attendance}
-                  >
-                    {pushing ? <CircularProgress size={20} /> : 'Push to ERP'}
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    onClick={() => downloadExport('attendance', 'xml')}
-                  >
-                    Download Attendance (XML)
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    onClick={() => downloadExport('attendance', 'json')}
-                  >
-                    Download Attendance (JSON)
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    onClick={() => downloadExport('employees', 'xml')}
-                  >
-                    Download Employees (XML)
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    onClick={() => downloadExport('employees', 'json')}
-                  >
-                    Download Employees (JSON)
-                  </Button>
-                </Box>
-              </Grid>
-            </Grid>
-
-            <Box mt={3}>
-              <Typography variant="h6" gutterBottom>
-                Public API Endpoints
-              </Typography>
-              <Alert severity="info">
-                Your ERP can pull data directly using these endpoints with your API key:
-              </Alert>
-              <Box mt={1}>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', bgcolor: '#f5f5f5', p: 1, borderRadius: 1 }}>
-                  GET /api/v1/erp/public/attendance?api_key=YOUR_KEY&format=xml
-                </Typography>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', bgcolor: '#f5f5f5', p: 1, borderRadius: 1, mt: 1 }}>
-                  GET /api/v1/erp/public/employees?api_key=YOUR_KEY&format=xml
-                </Typography>
+                {configMutation.isSuccess && <Alert severity="success" sx={{ mt: 1 }}>Configuration saved</Alert>}
               </Box>
             </Box>
-          </CardContent>
-        </Card>
-      )}
+          </TabPanel>
 
-      {tab === 2 && (
-        <Card>
-          <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Webhook Configuration
-            </Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Webhook URL"
-                  value={(config as any).webhook_url || ''}
-                  onChange={(e) => setConfig({ ...config, webhook_url: e.target.value } as any)}
-                  placeholder="https://your-erp.com/webhook/attendance"
-                />
+          {/* Export & Push Tab */}
+          <TabPanel value={tab} index={1}>
+            <Box sx={{ px: 3 }}>
+              <Grid container spacing={2.5}>
+                <Grid item xs={12} md={6}>
+                  <Card variant="outlined" sx={{ height: '100%' }}>
+                    <CardContent>
+                      <Typography variant="h6" sx={{ mb: 1 }}>Export Attendance Data</Typography>
+                      <Typography variant="body2" sx={{ color: '#718096', mb: 2 }}>
+                        Generate XML or JSON export for the last 30 days
+                      </Typography>
+                      <Button variant="contained" startIcon={<CloudUploadIcon />} onClick={() => handleExport('attendance')} disabled={exportMutation.isPending} fullWidth>
+                        {exportMutation.isPending ? 'Exporting...' : 'Export Attendance'}
+                      </Button>
+                      {exportResult && (
+                        <Alert severity="success" sx={{ mt: 2 }}>
+                          Export generated: {exportResult.filename || 'Success'}
+                        </Alert>
+                      )}
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Card variant="outlined" sx={{ height: '100%' }}>
+                    <CardContent>
+                      <Typography variant="h6" sx={{ mb: 1 }}>Push to ERP</Typography>
+                      <Typography variant="body2" sx={{ color: '#718096', mb: 2 }}>
+                        Send attendance data to the configured ERP endpoint
+                      </Typography>
+                      <Button variant="contained" color="secondary" startIcon={<SyncIcon />} onClick={() => pushMutation.mutate()} disabled={pushMutation.isPending || !configForm.push_enabled} fullWidth>
+                        {pushMutation.isPending ? 'Pushing...' : 'Push Attendance Data'}
+                      </Button>
+                      {!configForm.push_enabled && (
+                        <Alert severity="info" sx={{ mt: 2 }}>Enable push in Configuration tab first</Alert>
+                      )}
+                      {pushResult && (
+                        <Alert severity={pushResult.success ? 'success' : 'error'} sx={{ mt: 2 }}>
+                          {pushResult.message || (pushResult.success ? 'Push completed' : 'Push failed')}
+                        </Alert>
+                      )}
+                    </CardContent>
+                  </Card>
+                </Grid>
               </Grid>
-              <Grid item xs={12} sm={6}>
-                <TextField
-                  fullWidth
-                  label="Webhook Secret"
-                  value={(config as any).webhook_secret || ''}
-                  onChange={(e) => setConfig({ ...config, webhook_secret: e.target.value } as any)}
-                  type="password"
-                />
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={config.webhook_enabled ?? false}
-                      onChange={(e) => setConfig({ ...config, webhook_enabled: e.target.checked })}
-                    />
-                  }
-                  label="Enable Webhooks"
-                />
-              </Grid>
-              <Grid item xs={12}>
-                <Box display="flex" gap={2}>
-                  <Button variant="outlined" onClick={testWebhook} disabled={!config.webhook_enabled}>
-                    Test Webhook
-                  </Button>
-                  <Button variant="contained" onClick={saveConfig} disabled={saving}>
-                    Save Webhook Settings
-                  </Button>
-                </Box>
-              </Grid>
-            </Grid>
-
-            <Box mt={3}>
-              <Typography variant="h6" gutterBottom>
-                Webhook Events
-              </Typography>
-              <Alert severity="info">
-                When enabled, your ERP will receive POST requests to the webhook URL with event data:
-              </Alert>
-              <Box mt={1}>
-                <Chip label="check_in" color="primary" sx={{ mr: 1 }} />
-                <Chip label="check_out" color="secondary" sx={{ mr: 1 }} />
-                <Chip label="face_enrolled" color="success" sx={{ mr: 1 }} />
-                <Chip label="test" color="default" />
-              </Box>
             </Box>
-          </CardContent>
-        </Card>
-      )}
+          </TabPanel>
 
-      {tab === 3 && (
-        <Card>
-          <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Sync History
-            </Typography>
-            <TableContainer component={Paper}>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Type</TableCell>
-                    <TableCell>Direction</TableCell>
-                    <TableCell>Status</TableCell>
-                    <TableCell>Records</TableCell>
-                    <TableCell>Started</TableCell>
-                    <TableCell>Error</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {syncLogs.length === 0 ? (
+          {/* Webhooks Tab */}
+          <TabPanel value={tab} index={2}>
+            <Box sx={{ px: 3 }}>
+              <Typography variant="h6" sx={{ mb: 2 }}>Webhook Configuration</Typography>
+              <Grid container spacing={2}>
+                <Grid item xs={12}>
+                  <FormControlLabel control={<Switch checked={configForm.webhook_enabled} onChange={(e) => setConfigForm({ ...configForm, webhook_enabled: e.target.checked })} />} label="Enable webhooks" />
+                </Grid>
+                <Grid item xs={12} md={8}>
+                  <TextField fullWidth size="small" label="Webhook URL" placeholder="https://your-system.com/webhook/attendance" value={configForm.webhook_url} onChange={(e) => setConfigForm({ ...configForm, webhook_url: e.target.value })} disabled={!configForm.webhook_enabled} />
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <TextField fullWidth size="small" label="Webhook Secret" value={configForm.webhook_secret} onChange={(e) => setConfigForm({ ...configForm, webhook_secret: e.target.value })} disabled={!configForm.webhook_enabled} />
+                </Grid>
+              </Grid>
+              <Box sx={{ mt: 3, display: 'flex', gap: 2 }}>
+                <Button variant="contained" onClick={handleSaveConfig} disabled={configMutation.isPending}>
+                  Save
+                </Button>
+                <Button variant="outlined" onClick={() => webhookTestMutation.mutate()} disabled={!configForm.webhook_enabled || webhookTestMutation.isPending}>
+                  {webhookTestMutation.isPending ? 'Testing...' : 'Test Webhook'}
+                </Button>
+              </Box>
+              {webhookTestMutation.isSuccess && <Alert severity="success" sx={{ mt: 2 }}>Webhook test sent</Alert>}
+            </Box>
+          </TabPanel>
+
+          {/* Sync Logs Tab */}
+          <TabPanel value={tab} index={3}>
+            <Box sx={{ px: 3 }}>
+              <Typography variant="h6" sx={{ mb: 2 }}>Sync History</Typography>
+              <TableContainer>
+                <Table>
+                  <TableHead>
                     <TableRow>
-                      <TableCell colSpan={6} align="center">
-                        No sync logs found
-                      </TableCell>
+                      <TableCell>Time</TableCell>
+                      <TableCell>Type</TableCell>
+                      <TableCell>Format</TableCell>
+                      <TableCell>Records</TableCell>
+                      <TableCell>Status</TableCell>
+                      <TableCell>Details</TableCell>
                     </TableRow>
-                  ) : (
-                    syncLogs.map((log) => (
-                      <TableRow key={log.id}>
-                        <TableCell>{log.sync_type}</TableCell>
-                        <TableCell>{log.direction}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={log.status}
-                            color={log.status === 'success' ? 'success' : 'error'}
-                            size="small"
-                          />
-                        </TableCell>
-                        <TableCell>{log.records_count}</TableCell>
-                        <TableCell>
-                          {log.started_at ? new Date(log.started_at).toLocaleString() : '-'}
-                        </TableCell>
-                        <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {log.error_message || '-'}
+                  </TableHead>
+                  <TableBody>
+                    {logs.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6}>
+                          <Typography variant="body2" sx={{ color: '#a0aec0', textAlign: 'center', py: 4 }}>
+                            No sync logs yet
+                          </Typography>
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </CardContent>
-        </Card>
-      )}
+                    ) : (
+                      logs.map((log: any) => {
+                        const st = getLogStatusColor(log.status);
+                        return (
+                          <TableRow key={log.id} hover>
+                            <TableCell>
+                              <Typography variant="body2" sx={{ color: '#718096' }}>
+                                {log.created_at ? new Date(log.created_at).toLocaleString() : '-'}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>
+                              <Chip label={log.sync_type} size="small" variant="outlined" sx={{ fontSize: '0.7rem' }} />
+                            </TableCell>
+                            <TableCell>{log.export_format || '-'}</TableCell>
+                            <TableCell>{log.records_count || 0}</TableCell>
+                            <TableCell>
+                              <Chip label={log.status} size="small" sx={{ backgroundColor: st.bg, color: st.color, fontWeight: 600, fontSize: '0.7rem' }} />
+                            </TableCell>
+                            <TableCell>
+                              <Typography variant="body2" sx={{ color: '#718096', fontSize: '0.8rem' }}>
+                                {log.error_message || log.message || '-'}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Box>
+          </TabPanel>
+        </CardContent>
+      </Card>
     </Box>
   );
 }

@@ -10,14 +10,13 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Paper,
   IconButton,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
   TextField,
-  Alert,
+  Chip,
 } from '@mui/material';
 import { Edit as EditIcon, Delete as DeleteIcon, Add as AddIcon } from '@mui/icons-material';
 import { departmentAPI } from '../services/api';
@@ -25,15 +24,13 @@ import { departmentAPI } from '../services/api';
 interface Department {
   id: string;
   name: string;
-  description: string;
-  is_active: boolean;
+  employee_count: number;
 }
 
 export default function Departments() {
   const [open, setOpen] = useState(false);
-  const [selectedDept, setSelectedDept] = useState<Department | null>(null);
+  const [selected, setSelected] = useState<Department | null>(null);
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
   const queryClient = useQueryClient();
 
   const { data: departments, isLoading } = useQuery({
@@ -42,103 +39,92 @@ export default function Departments() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; description: string }) =>
-      departmentAPI.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['departments'] });
-      handleClose();
-    },
+    mutationFn: (data: { name: string }) => departmentAPI.create(data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['departments'] }); handleClose(); },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) =>
-      departmentAPI.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['departments'] });
-      handleClose();
-    },
+    mutationFn: ({ id, data }: { id: string; data: { name: string } }) => departmentAPI.update(id, data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['departments'] }); handleClose(); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => departmentAPI.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['departments'] });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['departments'] }),
   });
 
   const handleOpen = (dept?: Department) => {
     if (dept) {
-      setSelectedDept(dept);
+      setSelected(dept);
       setName(dept.name);
-      setDescription(dept.description);
     } else {
-      setSelectedDept(null);
+      setSelected(null);
       setName('');
-      setDescription('');
     }
     setOpen(true);
   };
 
-  const handleClose = () => {
-    setOpen(false);
-    setSelectedDept(null);
-    setName('');
-    setDescription('');
-  };
+  const handleClose = () => { setOpen(false); setSelected(null); setName(''); };
 
   const handleSubmit = () => {
-    if (selectedDept) {
-      updateMutation.mutate({ id: selectedDept.id, data: { name, description } });
-    } else {
-      createMutation.mutate({ name, description });
-    }
+    if (!name.trim()) return;
+    if (selected) { updateMutation.mutate({ id: selected.id, data: { name } }); }
+    else { createMutation.mutate({ name }); }
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this department?')) {
+    if (window.confirm('Are you sure? This will fail if employees are assigned to this department.')) {
       deleteMutation.mutate(id);
     }
   };
 
-  if (isLoading) {
-    return <Typography>Loading...</Typography>;
-  }
+  if (isLoading) return <Typography>Loading...</Typography>;
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
-        <Typography variant="h4">Departments</Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => handleOpen()}
-        >
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Box>
+          <Typography variant="h4" sx={{ mb: 0.5 }}>Departments</Typography>
+          <Typography variant="body2" sx={{ color: '#718096' }}>{departments?.length || 0} departments</Typography>
+        </Box>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
           Add Department
         </Button>
       </Box>
 
-      <TableContainer component={Paper}>
+      <TableContainer>
         <Table>
           <TableHead>
             <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Description</TableCell>
-              <TableCell>Status</TableCell>
+              <TableCell>Department Name</TableCell>
+              <TableCell>Employees</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {departments?.map((dept: Department) => (
-              <TableRow key={dept.id}>
-                <TableCell>{dept.name}</TableCell>
-                <TableCell>{dept.description}</TableCell>
-                <TableCell>{dept.is_active ? 'Active' : 'Inactive'}</TableCell>
+              <TableRow key={dept.id} hover>
+                <TableCell>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{dept.name}</Typography>
+                </TableCell>
+                <TableCell>
+                  <Chip
+                    label={`${dept.employee_count || 0} employees`}
+                    size="small"
+                    sx={{
+                      backgroundColor: '#ebf4ff',
+                      color: '#2b6cb0',
+                      fontWeight: 600,
+                      fontSize: '0.7rem',
+                    }}
+                  />
+                </TableCell>
                 <TableCell align="right">
-                  <IconButton onClick={() => handleOpen(dept)}>
-                    <EditIcon />
+                  <IconButton size="small" onClick={() => handleOpen(dept)}>
+                    <EditIcon fontSize="small" />
                   </IconButton>
-                  <IconButton onClick={() => handleDelete(dept.id)}>
-                    <DeleteIcon />
+                  <IconButton size="small" onClick={() => handleDelete(dept.id)}>
+                    <DeleteIcon fontSize="small" />
                   </IconButton>
                 </TableCell>
               </TableRow>
@@ -147,31 +133,25 @@ export default function Departments() {
         </Table>
       </TableContainer>
 
-      <Dialog open={open} onClose={handleClose}>
-        <DialogTitle>{selectedDept ? 'Edit Department' : 'Add Department'}</DialogTitle>
+      <Dialog open={open} onClose={handleClose} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>
+          {selected ? 'Edit Department' : 'Add Department'}
+        </DialogTitle>
         <DialogContent>
           <TextField
             autoFocus
             margin="dense"
             label="Department Name"
             fullWidth
+            size="small"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <TextField
-            margin="dense"
-            label="Description"
-            fullWidth
-            multiline
-            rows={3}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
         </DialogContent>
-        <DialogActions>
-          <Button onClick={handleClose}>Cancel</Button>
-          <Button onClick={handleSubmit} variant="contained">
-            {selectedDept ? 'Update' : 'Create'}
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={handleClose} variant="outlined" size="small">Cancel</Button>
+          <Button onClick={handleSubmit} variant="contained" size="small">
+            {selected ? 'Update' : 'Create'}
           </Button>
         </DialogActions>
       </Dialog>

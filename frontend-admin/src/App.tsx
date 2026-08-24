@@ -20,13 +20,106 @@ const queryClient = new QueryClient();
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#1976d2',
+      main: '#1a365d',
+      light: '#2c5282',
+      dark: '#0f2440',
     },
     secondary: {
-      main: '#dc004e',
+      main: '#2b6cb0',
+      light: '#3182ce',
+      dark: '#1e4e8c',
     },
     background: {
-      default: '#f5f5f5',
+      default: '#f0f2f5',
+      paper: '#ffffff',
+    },
+    text: {
+      primary: '#1a202c',
+      secondary: '#4a5568',
+    },
+    success: { main: '#2f855a' },
+    warning: { main: '#c05621' },
+    error: { main: '#c53030' },
+    info: { main: '#2b6cb0' },
+    divider: '#e2e8f0',
+  },
+  typography: {
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    h4: { fontWeight: 700, fontSize: '1.5rem', color: '#1a202c' },
+    h5: { fontWeight: 600, fontSize: '1.15rem' },
+    h6: { fontWeight: 600, fontSize: '1rem' },
+    subtitle1: { fontWeight: 500 },
+    body2: { color: '#4a5568' },
+  },
+  shape: {
+    borderRadius: 8,
+  },
+  components: {
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06)',
+          border: '1px solid #e2e8f0',
+        },
+      },
+    },
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none' as const,
+          fontWeight: 600,
+          borderRadius: 6,
+          padding: '8px 16px',
+        },
+        contained: {
+          boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+        },
+      },
+    },
+    MuiChip: {
+      styleOverrides: {
+        root: {
+          fontWeight: 500,
+          borderRadius: 6,
+        },
+      },
+    },
+    MuiTableHead: {
+      styleOverrides: {
+        root: {
+          '& .MuiTableCell-root': {
+            backgroundColor: '#f7fafc',
+            fontWeight: 700,
+            fontSize: '0.75rem',
+            textTransform: 'uppercase' as const,
+            letterSpacing: '0.05em',
+            color: '#4a5568',
+            borderBottom: '2px solid #e2e8f0',
+          },
+        },
+      },
+    },
+    MuiTableCell: {
+      styleOverrides: {
+        root: {
+          borderBottom: '1px solid #edf2f7',
+          padding: '12px 16px',
+        },
+      },
+    },
+    MuiDialog: {
+      styleOverrides: {
+        paper: {
+          borderRadius: 12,
+        },
+      },
     },
   },
 });

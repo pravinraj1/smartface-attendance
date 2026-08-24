@@ -75,31 +75,37 @@ export const attendanceAPI = {
 };
 
 export const faceAPI = {
-  enroll: (employeeId: string, file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    return api.post(`/faces/enroll?employee_id=${employeeId}`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-  },
+  enroll: (employeeId: string, image: string) =>
+    api.post(`/faces/enroll`, { employee_id: employeeId, image_data: image }),
   getEmployeeFaces: (employeeId: string) =>
     api.get(`/faces/employee/${employeeId}`),
   delete: (faceId: string) => api.delete(`/faces/${faceId}`),
-  recognize: (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    return api.post('/faces/recognize', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-  },
-  checkDuplicate: (file: File, excludeEmployeeId?: string) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    const params = excludeEmployeeId ? `?exclude_employee_id=${excludeEmployeeId}` : '';
-    return api.post(`/faces/check-duplicate${params}`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-  },
+  recognize: (image: string) =>
+    api.post('/faces/recognize', { image_data: image }),
+  getRecognitionLogs: (limit: number = 50) =>
+    api.get('/faces/recognize/logs', { params: { limit } }),
+  checkDuplicate: (image: string, excludeEmployeeId?: string) =>
+    api.post('/faces/check-duplicate', { image, exclude_employee_id: excludeEmployeeId }),
+};
+
+export const reportsAPI = {
+  getSummary: (params?: { start_date?: string; end_date?: string; department_id?: string }) =>
+    api.get('/reports/summary', { params }),
+  getEmployeeReport: (employeeId: string, params?: { start_date?: string; end_date?: string }) =>
+    api.get(`/reports/employee/${employeeId}`, { params }),
+  getDepartmentReport: (departmentId: string, params?: { start_date?: string; end_date?: string }) =>
+    api.get(`/reports/department/${departmentId}`, { params }),
+};
+
+export const erpAPI = {
+  getConfig: () => api.get('/erp/config'),
+  updateConfig: (data: any) => api.post('/erp/config', data),
+  exportAttendance: (params: any) => api.get('/erp/export/attendance', { params }),
+  exportEmployees: (params: any) => api.get('/erp/export/employees', { params }),
+  pushAttendance: () => api.post('/erp/push/attendance'),
+  testWebhook: () => api.post('/erp/webhook/test'),
+  getSyncLogs: (params?: { skip?: number; limit?: number }) =>
+    api.get('/erp/sync-logs', { params }),
 };
 
 export default api;

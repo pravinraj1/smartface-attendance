@@ -15,6 +15,8 @@ import {
   Avatar,
   Menu,
   MenuItem,
+  Divider,
+  Chip,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -27,9 +29,11 @@ import {
   Visibility as VisibilityIcon,
   ExitToApp as ExitToAppIcon,
   Sync as SyncIcon,
+  Person as PersonIcon,
+  ChevronLeft as ChevronLeftIcon,
 } from '@mui/icons-material';
 
-const drawerWidth = 240;
+const drawerWidth = 260;
 
 const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
@@ -39,6 +43,7 @@ const menuItems = [
   { text: 'Face Enrollment', icon: <FaceIcon />, path: '/face-enrollment' },
   { text: 'Face Recognition', icon: <VisibilityIcon />, path: '/face-recognition' },
   { text: 'Reports', icon: <AssessmentIcon />, path: '/reports' },
+  { divider: true },
   { text: 'ERP Integration', icon: <SyncIcon />, path: '/erp-integration' },
 ];
 
@@ -48,17 +53,9 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const handleDrawerToggle = () => {
-    setMobileOpen(!mobileOpen);
-  };
-
-  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setAnchorEl(null);
-  };
+  const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => setAnchorEl(event.currentTarget);
+  const handleMenuClose = () => setAnchorEl(null);
 
   const handleLogout = () => {
     localStorage.removeItem('access_token');
@@ -67,25 +64,84 @@ export default function Layout() {
   };
 
   const drawer = (
-    <Box>
-      <Toolbar>
-        <Typography variant="h6" noWrap component="div">
-          SmartFace
-        </Typography>
-      </Toolbar>
-      <List>
-        {menuItems.map((item) => (
-          <ListItem key={item.text} disablePadding>
-            <ListItemButton
-              selected={location.pathname === item.path}
-              onClick={() => navigate(item.path)}
-            >
-              <ListItemIcon>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.text} />
-            </ListItemButton>
-          </ListItem>
-        ))}
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Logo */}
+      <Box sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box
+          sx={{
+            width: 36,
+            height: 36,
+            borderRadius: '8px',
+            background: 'linear-gradient(135deg, #1a365d 0%, #2b6cb0 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <FaceIcon sx={{ color: 'white', fontSize: 20 }} />
+        </Box>
+        <Box>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#1a202c', lineHeight: 1.2 }}>
+            SmartFace
+          </Typography>
+          <Typography variant="caption" sx={{ color: '#718096', fontSize: '0.65rem' }}>
+            Attendance System
+          </Typography>
+        </Box>
+      </Box>
+
+      <Divider sx={{ mx: 2 }} />
+
+      {/* Navigation */}
+      <List sx={{ flex: 1, px: 1.5, py: 1 }}>
+        {menuItems.map((item, index) => {
+          if ('divider' in item && item.divider) {
+            return <Divider key={`div-${index}`} sx={{ my: 1 }} />;
+          }
+          const isActive = location.pathname === item.path;
+          return (
+            <ListItem key={item.text} disablePadding sx={{ mb: 0.5 }}>
+              <ListItemButton
+                selected={isActive}
+                onClick={() => {
+                  navigate(item.path);
+                  setMobileOpen(false);
+                }}
+                sx={{
+                  borderRadius: '8px',
+                  minHeight: 42,
+                  px: 1.5,
+                  backgroundColor: isActive ? '#ebf4ff' : 'transparent',
+                  '&:hover': { backgroundColor: '#edf2f7' },
+                  '&.Mui-selected': { backgroundColor: '#ebf4ff' },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 36, color: isActive ? '#2b6cb0' : '#718096' }}>
+                  {item.icon}
+                </ListItemIcon>
+                <ListItemText
+                  primary={item.text}
+                  primaryTypographyProps={{
+                    fontSize: '0.875rem',
+                    fontWeight: isActive ? 600 : 500,
+                    color: isActive ? '#2b6cb0' : '#4a5568',
+                  }}
+                />
+              </ListItemButton>
+            </ListItem>
+          );
+        })}
       </List>
+
+      {/* Footer */}
+      <Box sx={{ p: 2, borderTop: '1px solid #e2e8f0' }}>
+        <Chip
+          label="v1.0.0"
+          size="small"
+          variant="outlined"
+          sx={{ fontSize: '0.65rem', height: 20 }}
+        />
+      </Box>
     </Box>
   );
 
@@ -93,46 +149,57 @@ export default function Layout() {
     <Box sx={{ display: 'flex' }}>
       <AppBar
         position="fixed"
+        elevation={0}
         sx={{
           width: { sm: `calc(100% - ${drawerWidth}px)` },
           ml: { sm: `${drawerWidth}px` },
+          backgroundColor: 'white',
+          borderBottom: '1px solid #e2e8f0',
+          color: '#1a202c',
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ minHeight: '56px !important' }}>
           <IconButton
             color="inherit"
-            aria-label="open drawer"
             edge="start"
             onClick={handleDrawerToggle}
             sx={{ mr: 2, display: { sm: 'none' } }}
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
-            Attendance Management
-          </Typography>
-          <IconButton color="inherit" onClick={handleMenuOpen}>
-            <Avatar sx={{ width: 32, height: 32 }}>A</Avatar>
+
+          <Box sx={{ flexGrow: 1 }} />
+
+          <IconButton onClick={handleMenuOpen} sx={{ p: 0.5 }}>
+            <Avatar
+              sx={{
+                width: 34,
+                height: 34,
+                bgcolor: '#1a365d',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+              }}
+            >
+              <PersonIcon fontSize="small" />
+            </Avatar>
           </IconButton>
           <Menu
             anchorEl={anchorEl}
             open={Boolean(anchorEl)}
             onClose={handleMenuClose}
+            transformOrigin={{ horizontal: 'right', vertical: 'top' }}
+            anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+            slotProps={{ paper: { sx: { mt: 1, minWidth: 160, borderRadius: 2 } } }}
           >
-            <MenuItem onClick={handleLogout}>
-              <ListItemIcon>
-                <ExitToAppIcon fontSize="small" />
-              </ListItemIcon>
-              Logout
+            <MenuItem onClick={handleLogout} sx={{ py: 1 }}>
+              <ListItemIcon><ExitToAppIcon fontSize="small" /></ListItemIcon>
+              Sign Out
             </MenuItem>
           </Menu>
         </Toolbar>
       </AppBar>
 
-      <Box
-        component="nav"
-        sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}
-      >
+      <Box component="nav" sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}>
         <Drawer
           variant="temporary"
           open={mobileOpen}
@@ -149,7 +216,11 @@ export default function Layout() {
           variant="permanent"
           sx={{
             display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: drawerWidth,
+              borderRight: '1px solid #e2e8f0',
+            },
           }}
           open
         >
@@ -163,6 +234,8 @@ export default function Layout() {
           flexGrow: 1,
           p: 3,
           width: { sm: `calc(100% - ${drawerWidth}px)` },
+          minHeight: '100vh',
+          backgroundColor: '#f0f2f5',
         }}
       >
         <Toolbar />

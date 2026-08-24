@@ -3,236 +3,184 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Box,
   Typography,
+  Grid,
   Card,
   CardContent,
-  Grid,
   TextField,
-  MenuItem,
   Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
+  Chip,
 } from '@mui/material';
-import { Download as DownloadIcon } from '@mui/icons-material';
-import { attendanceAPI, employeeAPI } from '../services/api';
-
-interface Employee {
-  id: string;
-  full_name: string;
-  employee_code: string;
-}
+import { Assessment as AssessmentIcon, People as PeopleIcon, AccessTime as AccessTimeIcon } from '@mui/icons-material';
+import { reportsAPI } from '../services/api';
 
 export default function Reports() {
-  const [reportType, setReportType] = useState('daily');
-  const [selectedDate, setSelectedDate] = useState(
-    new Date().toISOString().split('T')[0]
-  );
-  const [selectedMonth, setSelectedMonth] = useState(
-    new Date().toISOString().slice(0, 7)
-  );
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
 
-  const { data: attendance, isLoading } = useQuery({
-    queryKey: ['attendance', selectedDate, reportType],
-    queryFn: () => {
-      if (reportType === 'daily') {
-        return attendanceAPI
-          .getAll({ start_date: selectedDate, end_date: selectedDate })
-          .then((res) => res.data);
-      }
-      const startDate = `${selectedMonth}-01`;
-      const endDate = `${selectedMonth}-31`;
-      return attendanceAPI
-        .getAll({ start_date: startDate, end_date: endDate })
-        .then((res) => res.data);
-    },
+  const { data: summary, isLoading: loadingSummary } = useQuery({
+    queryKey: ['reportSummary', startDate, endDate, departmentId],
+    queryFn: () => reportsAPI.getSummary({
+      start_date: startDate || undefined,
+      end_date: endDate || undefined,
+      department_id: departmentId || undefined,
+    }).then((res) => res.data),
   });
-
-  const { data: employees } = useQuery({
-    queryKey: ['employees'],
-    queryFn: () => employeeAPI.getAll().then((res) => res.data),
-  });
-
-  const formatMinutes = (minutes: number) => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
-  };
-
-  const calculateStats = () => {
-    if (!attendance) return { present: 0, absent: 0, late: 0, totalHours: 0 };
-    
-    const present = attendance.filter(
-      (r: any) => r.attendance_status === 'PRESENT' || r.attendance_status === 'LATE'
-    ).length;
-    const late = attendance.filter(
-      (r: any) => r.attendance_status === 'LATE'
-    ).length;
-    const totalHours = attendance.reduce(
-      (sum: number, r: any) => sum + (r.total_work_minutes || 0),
-      0
-    );
-    const totalEmployees = employees?.employees?.length || 0;
-    
-    return {
-      present,
-      absent: totalEmployees - present,
-      late,
-      totalHours: formatMinutes(totalHours),
-    };
-  };
-
-  const stats = calculateStats();
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Reports
-      </Typography>
-
-      <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-        <TextField
-          label="Report Type"
-          size="small"
-          select
-          value={reportType}
-          onChange={(e) => setReportType(e.target.value)}
-        >
-          <MenuItem value="daily">Daily Report</MenuItem>
-          <MenuItem value="monthly">Monthly Report</MenuItem>
-        </TextField>
-
-        {reportType === 'daily' ? (
-          <TextField
-            label="Date"
-            type="date"
-            size="small"
-            InputLabelProps={{ shrink: true }}
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-          />
-        ) : (
-          <TextField
-            label="Month"
-            type="month"
-            size="small"
-            InputLabelProps={{ shrink: true }}
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-          />
-        )}
-
-        <Button
-          variant="outlined"
-          startIcon={<DownloadIcon />}
-          onClick={() => alert('Export functionality coming soon')}
-        >
-          Export PDF
-        </Button>
-        <Button
-          variant="outlined"
-          startIcon={<DownloadIcon />}
-          onClick={() => alert('Export functionality coming soon')}
-        >
-          Export Excel
-        </Button>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="h4" sx={{ mb: 0.5 }}>Reports</Typography>
+        <Typography variant="body2" sx={{ color: '#718096' }}>
+          Attendance analytics and reporting
+        </Typography>
       </Box>
 
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
+      {/* Filters */}
+      <Card sx={{ mb: 2.5 }}>
+        <CardContent sx={{ py: 2.5 }}>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} md={3}>
+              <TextField
+                size="small"
+                type="date"
+                label="Start Date"
+                fullWidth
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                size="small"
+                type="date"
+                label="End Date"
+                fullWidth
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                size="small"
+                label="Department ID"
+                fullWidth
+                value={departmentId}
+                onChange={(e) => setDepartmentId(e.target.value)}
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Button variant="contained" fullWidth sx={{ py: 1.05 }}>
+                Generate Report
+              </Button>
+            </Grid>
+          </Grid>
+        </CardContent>
+      </Card>
+
+      {/* Summary Cards */}
+      <Grid container spacing={2.5} sx={{ mb: 3 }}>
+        <Grid item xs={12} md={4}>
           <Card>
-            <CardContent>
-              <Typography color="text.secondary">Present</Typography>
-              <Typography variant="h4">{stats.present}</Typography>
+            <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{
+                width: 48, height: 48, borderRadius: '12px', backgroundColor: '#ebf4ff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#2b6cb0',
+              }}>
+                <AssessmentIcon />
+              </Box>
+              <Box>
+                <Typography variant="body2" sx={{ color: '#718096', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                  Total Working Days
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                  {summary?.total_working_days || 0}
+                </Typography>
+              </Box>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} md={4}>
           <Card>
-            <CardContent>
-              <Typography color="text.secondary">Absent</Typography>
-              <Typography variant="h4">{stats.absent}</Typography>
+            <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{
+                width: 48, height: 48, borderRadius: '12px', backgroundColor: '#f0fff4',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#2f855a',
+              }}>
+                <PeopleIcon />
+              </Box>
+              <Box>
+                <Typography variant="body2" sx={{ color: '#718096', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                  Avg Attendance Rate
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                  {summary?.avg_attendance_rate ? `${(summary.avg_attendance_rate * 100).toFixed(1)}%` : '0%'}
+                </Typography>
+              </Box>
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} md={4}>
           <Card>
-            <CardContent>
-              <Typography color="text.secondary">Late</Typography>
-              <Typography variant="h4">{stats.late}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card>
-            <CardContent>
-              <Typography color="text.secondary">Total Hours</Typography>
-              <Typography variant="h4">{stats.totalHours}</Typography>
+            <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Box sx={{
+                width: 48, height: 48, borderRadius: '12px', backgroundColor: '#fffaf0',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c05621',
+              }}>
+                <AccessTimeIcon />
+              </Box>
+              <Box>
+                <Typography variant="body2" sx={{ color: '#718096', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                  Total Absences
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                  {summary?.total_absences || 0}
+                </Typography>
+              </Box>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
 
-      <Typography variant="h5" gutterBottom>
-        {reportType === 'daily' ? 'Daily' : 'Monthly'} Report
-      </Typography>
-
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Employee</TableCell>
-              <TableCell>Code</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Check In</TableCell>
-              <TableCell>Check Out</TableCell>
-              <TableCell>Hours Worked</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={6} align="center">
-                  Loading...
-                </TableCell>
-              </TableRow>
-            ) : attendance?.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} align="center">
-                  No records found
-                </TableCell>
-              </TableRow>
-            ) : (
-              attendance?.map((record: any) => {
-                const employee = employees?.employees?.find(
-                  (e: Employee) => e.id === record.employee_id
-                );
-                return (
-                  <TableRow key={record.id}>
-                    <TableCell>{employee?.full_name || '-'}</TableCell>
-                    <TableCell>{employee?.employee_code || '-'}</TableCell>
-                    <TableCell>{record.attendance_status}</TableCell>
-                    <TableCell>
-                      {record.check_in
-                        ? new Date(record.check_in).toLocaleTimeString()
-                        : '-'}
-                    </TableCell>
-                    <TableCell>
-                      {record.check_out
-                        ? new Date(record.check_out).toLocaleTimeString()
-                        : '-'}
-                    </TableCell>
-                    <TableCell>{formatMinutes(record.total_work_minutes)}</TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      {/* Department Breakdown */}
+      <Card>
+        <CardContent sx={{ p: 3 }}>
+          <Typography variant="h6" sx={{ mb: 2 }}>Department Breakdown</Typography>
+          {summary?.department_summary?.length > 0 ? (
+            summary.department_summary.map((dept: any) => (
+              <Box
+                key={dept.department_id}
+                sx={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  py: 1.5,
+                  borderBottom: '1px solid #edf2f7',
+                  '&:last-child': { borderBottom: 'none' },
+                }}
+              >
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{dept.department_name}</Typography>
+                  <Typography variant="caption" sx={{ color: '#718096' }}>
+                    {dept.present_days} present / {dept.absent_days} absent / {dept.late_days} late
+                  </Typography>
+                </Box>
+                <Chip
+                  label={`${dept.total_employees} employees`}
+                  size="small"
+                  sx={{ backgroundColor: '#ebf4ff', color: '#2b6cb0', fontWeight: 600, fontSize: '0.7rem' }}
+                />
+              </Box>
+            ))
+          ) : (
+            <Typography variant="body2" sx={{ color: '#a0aec0', py: 2 }}>
+              No department data available. Set a date range and click Generate Report.
+            </Typography>
+          )}
+        </CardContent>
+      </Card>
     </Box>
   );
 }
