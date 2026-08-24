@@ -1,13 +1,13 @@
 from typing import Optional, Tuple, List
 import os
-import hashlib
 import struct
 import io
+import json
+import math
 
 
 class FaceService:
     def __init__(self):
-        self.app = None
         self._initialized = False
         self._mode = "pillow"
 
@@ -15,28 +15,9 @@ class FaceService:
         if self._initialized:
             return
         os.environ.setdefault("FACE_MODE", "pillow")
-        mode = os.environ.get("FACE_MODE", "pillow")
-        if mode == "pillow":
-            self._mode = "pillow"
-            self._initialized = True
-            print("Face service: Pillow mode (lightweight)")
-            return
-        try:
-            import cv2
-            import numpy as np
-            from insightface.app import FaceAnalysis
-            self.app = FaceAnalysis(
-                name="buffalo_s",
-                providers=["CPUExecutionProvider"],
-            )
-            self.app.prepare(ctx_id=0, det_size=(640, 640))
-            self._mode = "insightface"
-            self._initialized = True
-            print("Face service: InsightFace mode")
-        except Exception as e:
-            print(f"InsightFace init failed: {e}, using Pillow fallback")
-            self._mode = "pillow"
-            self._initialized = True
+        self._mode = "pillow"
+        self._initialized = True
+        print("Face service: Pillow mode (lightweight)")
 
     def detect_and_embed(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
         self.initialize()
@@ -60,19 +41,24 @@ class FaceService:
 
     def _image_to_embedding(self, img) -> List[float]:
         from PIL import Image
-        small = img.resize((32, 32), Image.LANCZOS)
+        small = img.resize((16, 16), Image.LANCZOS)
         pixels = list(small.getdata())
-        flat = []
-        for r, g, b in pixels:
-            flat.extend([r / 255.0, g / 255.0, b / 255.0])
-
         embedding = []
-        for i in range(512):
-            seed = hashlib.sha256(struct.pack("f", flat[i % len(flat)]) + struct.pack("I", i)).digest()
-            val = struct.unpack("f", seed[:4])[0]
-            embedding.append(val)
+        for r, g, b in pixels:
+            embedding.append(r / 255.0)
+            embedding.append(g / 255.0)
+            embedding.append(b / 255.0)
 
-        norm = sum(x * x for x in embedding) ** 0.5
+        avg_r = sum(embedding[i] for i in range(0, len(embedding), 3)) / 256.0
+        avg_g = sum(embedding[i] for i in range(1, len(embedding), 3)) / 256.0
+        avg_b = sum(embedding[i] for i in range(2, len(embedding), 3)) / 256.0
+
+        for i in range(0, len(embedding), 3):
+            embedding[i] -= avg_r
+            embedding[i + 1] -= avg_g
+            embedding[i + 2] -= avg_b
+
+        norm = math.sqrt(sum(x * x for x in embedding))
         if norm > 0:
             embedding = [x / norm for x in embedding]
         return embedding
@@ -83,7 +69,6 @@ class FaceService:
         embedding2: List[float],
         threshold: float = 0.4,
     ) -> Tuple[bool, float]:
-        import math
         dot = sum(a * b for a, b in zip(embedding1, embedding2))
         norm1 = math.sqrt(sum(a * a for a in embedding1))
         norm2 = math.sqrt(sum(b * b for b in embedding2))
@@ -108,6 +93,15 @@ class FaceService:
         if best_id is not None:
             return best_id, best_score
         return None
+
+    def embedding_to_json(self, embedding: List[float]) -> str:
+        return json.dumps(embedding)
+
+    def embedding_from_json(self, data: str) -> Optional[List[float]]:
+        try:
+            return json.loads(data)
+        except Exception:
+            return None
 
     def save_embedding(self, filepath: str, embedding: List[float]):
         os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)

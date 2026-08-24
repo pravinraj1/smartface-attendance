@@ -11,14 +11,22 @@ class FaceProfileBase(BaseModel):
     embedding_version: Optional[str] = None
     enrollment_quality_score: Optional[Decimal] = None
     is_primary: bool = True
+    face_image_data: Optional[str] = None
+    embedding_data: Optional[str] = None
 
 
 class FaceProfileCreate(FaceProfileBase):
     pass
 
 
-class FaceProfileResponse(FaceProfileBase):
+class FaceProfileResponse(BaseModel):
     id: str
+    employee_id: str
+    face_image_url: str
+    qdrant_vector_id: Optional[str] = None
+    embedding_version: Optional[str] = None
+    enrollment_quality_score: Optional[Decimal] = None
+    is_primary: bool = True
     created_at: Optional[datetime] = None
     
     class Config:

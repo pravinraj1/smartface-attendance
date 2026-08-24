@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional
 import os
 import uuid as uuid_lib
+import base64
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -45,19 +47,10 @@ async def enroll_face(
 
     file_ext = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
     file_name = f"{uuid_lib.uuid4()}{file_ext}"
+    relative_url = f"/api/v1/faces/image/{employee.employee_code}/{file_name}"
 
-    storage_dir = os.path.join(settings.STORAGE_PATH, "employees", str(employee.employee_code))
-    os.makedirs(storage_dir, exist_ok=True)
-
-    abs_file_path = os.path.join(storage_dir, file_name)
-    with open(abs_file_path, "wb") as f:
-        f.write(content)
-
-    embedding_path = os.path.join(storage_dir, f"{uuid_lib.uuid4()}.bin")
-    face_service.save_embedding(embedding_path, embedding)
-
-    relative_url = f"/storage/employees/{employee.employee_code}/{file_name}"
-    relative_emb_path = f"employees/{employee.employee_code}/{os.path.basename(embedding_path)}"
+    image_data_b64 = base64.b64encode(content).decode("utf-8")
+    embedding_json = face_service.embedding_to_json(embedding)
 
     quality_score = detection_info.get("quality", 0.75) if detection_info else 0.75
 
@@ -70,11 +63,12 @@ async def enroll_face(
     face_profile = FaceProfile(
         employee_id=employee_id,
         face_image_url=relative_url,
-        embedding_version="buffalo_l_v1",
+        face_image_data=image_data_b64,
+        embedding_data=embedding_json,
+        embedding_version="pillow_v1",
         enrollment_quality_score=round(quality_score * 100, 2),
         is_primary=is_primary,
     )
-    face_profile.qdrant_vector_id = relative_emb_path
     db.add(face_profile)
 
     employee.face_enrolled = True
@@ -94,6 +88,28 @@ async def get_employee_faces(
         select(FaceProfile).where(FaceProfile.employee_id == employee_id)
     )
     return result.scalars().all()
+
+
+@router.get("/image/{employee_code}/{filename}")
+async def serve_face_image(
+    employee_code: str,
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(FaceProfile).where(FaceProfile.face_image_url.like(f"%/{filename}"))
+    )
+    face_profile = result.scalar_one_or_none()
+    if not face_profile or not face_profile.face_image_data:
+        abs_path = os.path.join(os.path.abspath(settings.STORAGE_PATH), "employees", employee_code, filename)
+        if os.path.exists(abs_path):
+            with open(abs_path, "rb") as f:
+                data = f.read()
+            return Response(content=data, media_type="image/jpeg")
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    image_bytes = base64.b64decode(face_profile.face_image_data)
+    return Response(content=image_bytes, media_type="image/jpeg")
 
 
 @router.delete("/{face_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -133,6 +149,21 @@ async def delete_face(
     await db.commit()
 
 
+def _load_known_embeddings(all_faces):
+    known_embeddings = []
+    for fp in all_faces:
+        emb = None
+        if fp.embedding_data:
+            emb = face_service.embedding_from_json(fp.embedding_data)
+        if emb is None and fp.qdrant_vector_id:
+            abs_emb = os.path.join(os.path.abspath(settings.STORAGE_PATH), fp.qdrant_vector_id)
+            if os.path.exists(abs_emb):
+                emb = face_service.load_embedding(abs_emb)
+        if emb:
+            known_embeddings.append((fp.employee_id, emb))
+    return known_embeddings
+
+
 @router.post("/recognize")
 async def recognize_face(
     file: UploadFile = File(...),
@@ -153,14 +184,7 @@ async def recognize_face(
     all_faces_result = await db.execute(select(FaceProfile))
     all_faces = all_faces_result.scalars().all()
 
-    known_embeddings = []
-    for fp in all_faces:
-        if fp.qdrant_vector_id:
-            abs_emb = os.path.join(os.path.abspath(settings.STORAGE_PATH), fp.qdrant_vector_id)
-            if os.path.exists(abs_emb):
-                emb = face_service.load_embedding(abs_emb)
-                if emb:
-                    known_embeddings.append((fp.employee_id, emb))
+    known_embeddings = _load_known_embeddings(all_faces)
 
     if not known_embeddings:
         return {
@@ -216,18 +240,18 @@ async def check_duplicate_face(
     all_faces = all_faces_result.scalars().all()
 
     known_embeddings = []
-    emp_map = {}
     for fp in all_faces:
         if fp.employee_id == exclude_employee_id:
             continue
-        if fp.qdrant_vector_id:
+        emb = None
+        if fp.embedding_data:
+            emb = face_service.embedding_from_json(fp.embedding_data)
+        if emb is None and fp.qdrant_vector_id:
             abs_emb = os.path.join(os.path.abspath(settings.STORAGE_PATH), fp.qdrant_vector_id)
             if os.path.exists(abs_emb):
                 emb = face_service.load_embedding(abs_emb)
-                if emb:
-                    known_embeddings.append((fp.employee_id, emb))
-                    if fp.employee_id not in emp_map:
-                        emp_map[fp.employee_id] = fp
+        if emb:
+            known_embeddings.append((fp.employee_id, emb))
 
     if not known_embeddings:
         return {
@@ -271,14 +295,7 @@ async def verify_face(
     all_faces_result = await db.execute(select(FaceProfile))
     all_faces = all_faces_result.scalars().all()
 
-    known_embeddings = []
-    for fp in all_faces:
-        if fp.qdrant_vector_id:
-            abs_emb = os.path.join(os.path.abspath(settings.STORAGE_PATH), fp.qdrant_vector_id)
-            if os.path.exists(abs_emb):
-                emb = face_service.load_embedding(abs_emb)
-                if emb:
-                    known_embeddings.append((fp.employee_id, emb))
+    known_embeddings = _load_known_embeddings(all_faces)
 
     match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.4)
 

@@ -6,13 +6,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 
 const String kApiPrefix = '/api/v1';
-const String kDefaultIp = '192.168.1.8';
+const String kDefaultUrl = 'https://smartface-attendance-7ygu.onrender.com';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final cameras = await availableCameras();
   final prefs = await SharedPreferences.getInstance();
-  final savedIp = kIsWeb ? '' : (prefs.getString('server_ip') ?? kDefaultIp);
+  final savedIp = kIsWeb ? '' : (prefs.getString('server_ip') ?? kDefaultUrl);
   runApp(MyApp(cameras: cameras, serverIp: savedIp));
 }
 
@@ -85,11 +85,11 @@ class _KioskHomeState extends State<KioskHome> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Server Settings'),
-        content: TextField(
+          content: TextField(
           controller: controller,
           decoration: const InputDecoration(
-            labelText: 'Server IP or URL',
-            hintText: 'e.g. 192.168.1.8 or https://your-app.onrender.com',
+            labelText: 'Server URL',
+            hintText: 'e.g. https://smartface-attendance-7ygu.onrender.com',
             border: OutlineInputBorder(),
           ),
         ),
