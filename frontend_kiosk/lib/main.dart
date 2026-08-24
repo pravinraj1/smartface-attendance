@@ -13,9 +13,14 @@ const String kDefaultUrl = 'https://smartface-attendance-7ygu.onrender.com';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final cameras = await availableCameras();
+  // Use only front camera
+  final frontCam = cameras.firstWhere(
+    (c) => c.lensDirection == CameraLensDirection.front,
+    orElse: () => cameras.first,
+  );
   final prefs = await SharedPreferences.getInstance();
   final savedIp = kIsWeb ? '' : (prefs.getString('server_ip') ?? kDefaultUrl);
-  runApp(MyApp(cameras: cameras, serverIp: savedIp));
+  runApp(MyApp(cameras: [frontCam], serverIp: savedIp));
 }
 
 class MyApp extends StatelessWidget {
@@ -173,7 +178,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
   String _employeeCode = '';
   bool _isProcessing = false;
   int _recognitionCount = 0;
-  int _camIdx = 0;
   Timer? _autoScanTimer;
   bool _scanning = false;
   String _lastAction = '';
@@ -195,7 +199,7 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
     _pulseAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
-    _initCamera(widget.cameras[_camIdx]);
+    _initCamera(widget.cameras[0]);
     _startAutoScan();
   }
 
@@ -210,13 +214,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
     _pulseController.dispose();
     _controller.dispose();
     super.dispose();
-  }
-
-  Future<void> _switchCamera() async {
-    if (widget.cameras.length < 2) return;
-    await _controller.dispose();
-    _camIdx = (_camIdx + 1) % widget.cameras.length;
-    setState(() => _initCamera(widget.cameras[_camIdx]));
   }
 
   Map<String, String> get _headers => {
@@ -448,15 +445,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             ),
             const SizedBox(width: 10),
             GestureDetector(
-              onTap: _switchCamera,
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: Colors.black.withAlpha(153), borderRadius: BorderRadius.circular(8)),
-                child: const Icon(Icons.cameraswitch, color: Colors.white70, size: 28),
-              ),
-            ),
-            const SizedBox(width: 10),
-            GestureDetector(
               onTap: widget.onSettings,
               child: Container(
                 padding: const EdgeInsets.all(10),
@@ -526,7 +514,6 @@ class EnrollmentMode extends StatefulWidget {
 class _EnrollmentModeState extends State<EnrollmentMode> {
   late CameraController _controller;
   late Future<void> _initFuture;
-  int _camIdx = 0;
   List<dynamic> _employees = [];
   String? _selectedEmployeeId;
   String _selectedEmployeeName = '';
@@ -543,7 +530,7 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
   @override
   void initState() {
     super.initState();
-    _initCamera(widget.cameras[_camIdx]);
+    _initCamera(widget.cameras[0]);
     _fetchEmployees();
   }
 
@@ -556,13 +543,6 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
   void dispose() {
     _controller.dispose();
     super.dispose();
-  }
-
-  Future<void> _switchCamera() async {
-    if (widget.cameras.length < 2) return;
-    await _controller.dispose();
-    _camIdx = (_camIdx + 1) % widget.cameras.length;
-    setState(() => _initCamera(widget.cameras[_camIdx]));
   }
 
   Map<String, String> get _headers => {
@@ -754,17 +734,6 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
                         style: const TextStyle(color: Colors.white70, fontSize: 14),
                       ),
                     ],
-                  ),
-                ),
-              ),
-              Positioned(
-                bottom: 20, right: 20,
-                child: GestureDetector(
-                  onTap: _switchCamera,
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: Colors.black.withAlpha(153), borderRadius: BorderRadius.circular(8)),
-                    child: const Icon(Icons.cameraswitch, color: Colors.white70, size: 28),
                   ),
                 ),
               ),
