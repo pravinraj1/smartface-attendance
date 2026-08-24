@@ -4,7 +4,6 @@ from sqlalchemy import select
 from typing import Optional
 import os
 import uuid as uuid_lib
-import numpy as np
 
 from app.core.database import get_db
 from app.core.security import get_current_user
