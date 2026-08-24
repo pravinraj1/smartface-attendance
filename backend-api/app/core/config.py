@@ -35,3 +35,6 @@ settings = Settings()
 
 if settings.DATABASE_URL.startswith("postgresql://"):
     settings.DATABASE_URL = settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+if "sslmode=" in settings.DATABASE_URL:
+    settings.DATABASE_URL = settings.DATABASE_URL.split("?")[0]
