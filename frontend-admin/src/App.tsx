@@ -12,6 +12,7 @@ import Attendance from './pages/Attendance';
 import Reports from './pages/Reports';
 import FaceEnrollment from './pages/FaceEnrollment';
 import FaceRecognition from './pages/FaceRecognition';
+import ERPIntegration from './pages/ERPIntegration';
 import Layout from './components/Layout';
 
 const queryClient = new QueryClient();
@@ -61,6 +62,7 @@ function App() {
               <Route path="face-enrollment" element={<FaceEnrollment />} />
               <Route path="face-recognition" element={<FaceRecognition />} />
               <Route path="reports" element={<Reports />} />
+              <Route path="erp-integration" element={<ERPIntegration />} />
             </Route>
           </Routes>
         </Router>

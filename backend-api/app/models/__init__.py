@@ -11,6 +11,7 @@ from app.models.system_setting import SystemSetting
 from app.models.holiday import Holiday
 from app.models.leave_type import LeaveType
 from app.models.report_export import ReportExport
+from app.models.erp_config import ERPConfig, ERPsyncLog
 
 __all__ = [
     "Department",
@@ -26,4 +27,6 @@ __all__ = [
     "Holiday",
     "LeaveType",
     "ReportExport",
+    "ERPConfig",
+    "ERPsyncLog",
 ]

@@ -26,6 +26,7 @@ import {
   Face as FaceIcon,
   Visibility as VisibilityIcon,
   ExitToApp as ExitToAppIcon,
+  Sync as SyncIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -38,6 +39,7 @@ const menuItems = [
   { text: 'Face Enrollment', icon: <FaceIcon />, path: '/face-enrollment' },
   { text: 'Face Recognition', icon: <VisibilityIcon />, path: '/face-recognition' },
   { text: 'Reports', icon: <AssessmentIcon />, path: '/reports' },
+  { text: 'ERP Integration', icon: <SyncIcon />, path: '/erp-integration' },
 ];
 
 export default function Layout() {

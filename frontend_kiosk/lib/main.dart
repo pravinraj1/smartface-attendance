@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'dart:math';
 
 const String kApiPrefix = '/api/v1';
 const String kDefaultUrl = 'https://smartface-attendance-7ygu.onrender.com';
@@ -85,7 +87,7 @@ class _KioskHomeState extends State<KioskHome> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Server Settings'),
-          content: TextField(
+        content: TextField(
           controller: controller,
           decoration: const InputDecoration(
             labelText: 'Server URL',
@@ -163,7 +165,7 @@ class AttendanceMode extends StatefulWidget {
   State<AttendanceMode> createState() => _AttendanceModeState();
 }
 
-class _AttendanceModeState extends State<AttendanceMode> {
+class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProviderStateMixin {
   late CameraController _controller;
   late Future<void> _initFuture;
   String _status = 'Initializing...';
@@ -172,20 +174,40 @@ class _AttendanceModeState extends State<AttendanceMode> {
   bool _isProcessing = false;
   int _recognitionCount = 0;
   int _camIdx = 0;
+  Timer? _autoScanTimer;
+  bool _scanning = false;
+  String _lastAction = '';
+  DateTime? _lastScanTime;
+  DateTime? _lastSuccessTime;
+  int _cooldownSeconds = 5;
+
+  // Animation for scanning indicator
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
     _initCamera(widget.cameras[_camIdx]);
+    _startAutoScan();
   }
 
   void _initCamera(CameraDescription cam) {
-    _controller = CameraController(cam, ResolutionPreset.high, enableAudio: false);
+    _controller = CameraController(cam, ResolutionPreset.medium, enableAudio: false);
     _initFuture = _controller.initialize();
   }
 
   @override
   void dispose() {
+    _autoScanTimer?.cancel();
+    _pulseController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -197,18 +219,39 @@ class _AttendanceModeState extends State<AttendanceMode> {
     setState(() => _initCamera(widget.cameras[_camIdx]));
   }
 
-  Future<void> _captureAndRecognize() async {
+  Map<String, String> get _headers => {
+    'Content-Type': 'application/json',
+    if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+  };
+
+  void _startAutoScan() {
+    _autoScanTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _autoScan();
+    });
+  }
+
+  Future<void> _autoScan() async {
     if (!_controller.value.isInitialized || _isProcessing) return;
+
+    // Cooldown after success
+    if (_lastSuccessTime != null) {
+      final elapsed = DateTime.now().difference(_lastSuccessTime!).inSeconds;
+      if (elapsed < _cooldownSeconds) return;
+    }
+
     setState(() {
-      _isProcessing = true;
-      _status = 'Detecting face...';
+      _scanning = true;
+      _status = 'Scanning...';
     });
 
     try {
       final XFile image = await _controller.takePicture();
       final bytes = await image.readAsBytes();
 
-      var req = http.MultipartRequest('POST', Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/recognize'));
+      var req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/recognize'),
+      );
       if (widget.authToken != null) req.headers['Authorization'] = 'Bearer ${widget.authToken}';
       req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'capture.jpg'));
 
@@ -227,33 +270,68 @@ class _AttendanceModeState extends State<AttendanceMode> {
             _employeeName = name;
             _employeeCode = code;
             _status = 'CHECK-IN SUCCESS';
+            _lastAction = 'CHECK-IN';
             _recognitionCount++;
+            _lastSuccessTime = DateTime.now();
           });
 
-          await http.post(
+          // Auto check-in
+          final checkinResponse = await http.post(
             Uri.parse('${widget.apiBaseUrl}$kApiPrefix/attendance/checkin'),
-            headers: {'Content-Type': 'application/json', if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}'},
+            headers: {
+              'Content-Type': 'application/json',
+              if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+            },
             body: json.encode({'employee_id': employeeId, 'confidence_score': confidence}),
           );
 
+          if (checkinResponse.statusCode == 200) {
+            final checkinData = json.decode(checkinResponse.body);
+            setState(() => _status = 'CHECK-IN SUCCESS');
+          } else {
+            final errBody = json.decode(checkinResponse.body);
+            final msg = errBody['detail'] ?? '';
+            if (msg.toString().toLowerCase().contains('already checked in')) {
+              // Auto check-out
+              setState(() => _status = 'Checking out...');
+              final checkoutResponse = await http.post(
+                Uri.parse('${widget.apiBaseUrl}$kApiPrefix/attendance/checkout'),
+                headers: {
+                  'Content-Type': 'application/json',
+                  if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+                },
+                body: json.encode({'employee_id': employeeId, 'confidence_score': confidence}),
+              );
+              if (checkoutResponse.statusCode == 200) {
+                setState(() {
+                  _status = 'CHECK-OUT SUCCESS';
+                  _lastAction = 'CHECK-OUT';
+                });
+              } else {
+                final checkoutErr = json.decode(checkoutResponse.body);
+                setState(() => _status = checkoutErr['detail'] ?? 'Checkout failed');
+              }
+            } else {
+              setState(() => _status = msg.toString());
+            }
+          }
+
           await Future.delayed(const Duration(seconds: 3));
-          setState(() { _status = 'Ready for attendance'; _employeeName = ''; _employeeCode = ''; });
+          setState(() {
+            _status = 'Ready for attendance';
+            _employeeName = '';
+            _employeeCode = '';
+          });
         } else {
-          setState(() => _status = 'FACE NOT RECOGNIZED');
-          await Future.delayed(const Duration(seconds: 2));
-          setState(() => _status = 'Ready for attendance');
+          setState(() {
+            _status = 'Face not recognized - Tap to select name';
+          });
         }
-      } else {
-        setState(() => _status = 'Error ${response.statusCode}');
-        await Future.delayed(const Duration(seconds: 2));
-        setState(() => _status = 'Ready for attendance');
       }
     } catch (e) {
-      setState(() => _status = 'Connection error');
-      await Future.delayed(const Duration(seconds: 3));
-      setState(() => _status = 'Ready for attendance');
+      setState(() => _status = 'Scanning...');
     } finally {
-      setState(() => _isProcessing = false);
+      setState(() => _scanning = false);
     }
   }
 
@@ -269,27 +347,70 @@ class _AttendanceModeState extends State<AttendanceMode> {
             return const Center(child: CircularProgressIndicator(color: Colors.white));
           },
         ),
+        // Scanning frame border
         Container(
           decoration: BoxDecoration(
             border: Border.all(
-              color: _status == 'CHECK-IN SUCCESS' ? Colors.green : _status == 'FACE NOT RECOGNIZED' ? Colors.red : Colors.blue,
+              color: _status.contains('SUCCESS')
+                  ? Colors.green
+                  : _status.contains('Scanning')
+                      ? Colors.blue
+                      : Colors.white54,
               width: 4,
             ),
           ),
         ),
+        // Scanning corners
+        if (_scanning)
+          CustomPaint(
+            painter: ScannerCornerPainter(
+              color: Colors.blue,
+            ),
+          ),
+        // Top info
         Positioned(
           top: 50, left: 0, right: 0,
           child: Column(children: [
             const Text('SMARTFACE', style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             Text(_status, style: TextStyle(
-              color: _status == 'CHECK-IN SUCCESS' ? Colors.green : _status == 'FACE NOT RECOGNIZED' ? Colors.red : Colors.white,
+              color: _status.contains('SUCCESS') ? Colors.green : Colors.white,
               fontSize: 24, fontWeight: FontWeight.bold,
             )),
             const SizedBox(height: 5),
             Text(DateTime.now().toString().substring(0, 16), style: const TextStyle(color: Colors.white70, fontSize: 16)),
           ]),
         ),
+        // Scanning pulse indicator
+        if (_scanning)
+          Positioned(
+            top: 150, left: 0, right: 0,
+            child: Center(
+              child: AnimatedBuilder(
+                animation: _pulseAnimation,
+                builder: (context, child) {
+                  return Opacity(
+                    opacity: _pulseAnimation.value,
+                    child: Container(
+                      width: 20, height: 20,
+                      decoration: BoxDecoration(
+                        color: Colors.blue,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blue.withAlpha(100),
+                            blurRadius: 10 * _pulseAnimation.value,
+                            spreadRadius: 5 * _pulseAnimation.value,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        // Welcome/Goodbye card
         if (_employeeName.isNotEmpty)
           Positioned(
             bottom: 100, left: 40, right: 40,
@@ -297,32 +418,26 @@ class _AttendanceModeState extends State<AttendanceMode> {
               padding: const EdgeInsets.all(30),
               decoration: BoxDecoration(color: Colors.black.withAlpha(204), borderRadius: BorderRadius.circular(20)),
               child: Column(children: [
-                const Icon(Icons.check_circle, color: Colors.green, size: 80),
+                Icon(
+                  _lastAction == 'CHECK-OUT' ? Icons.logout : Icons.check_circle,
+                  color: Colors.green,
+                  size: 80,
+                ),
                 const SizedBox(height: 20),
-                const Text('WELCOME', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+                Text(
+                  _lastAction == 'CHECK-OUT' ? 'GOODBYE' : 'WELCOME',
+                  style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 10),
                 Text(_employeeName, style: const TextStyle(color: Colors.white, fontSize: 24)),
-                if (_employeeCode.isNotEmpty) Text(_employeeCode, style: const TextStyle(color: Colors.grey, fontSize: 16)),
+                if (_employeeCode.isNotEmpty)
+                  Text(_employeeCode, style: const TextStyle(color: Colors.grey, fontSize: 16)),
                 const SizedBox(height: 10),
                 Text(DateTime.now().toString().substring(11, 16), style: const TextStyle(color: Colors.white, fontSize: 20)),
               ]),
             ),
           ),
-        if (_status == 'FACE NOT RECOGNIZED')
-          Positioned(
-            bottom: 100, left: 40, right: 40,
-            child: Container(
-              padding: const EdgeInsets.all(30),
-              decoration: BoxDecoration(color: Colors.black.withAlpha(204), borderRadius: BorderRadius.circular(20)),
-              child: const Column(children: [
-                Icon(Icons.error_outline, color: Colors.red, size: 80),
-                SizedBox(height: 20),
-                Text('FACE NOT RECOGNIZED', style: TextStyle(color: Colors.red, fontSize: 24, fontWeight: FontWeight.bold)),
-                SizedBox(height: 10),
-                Text('PLEASE CONTACT HR', style: TextStyle(color: Colors.white, fontSize: 18)),
-              ]),
-            ),
-          ),
+        // Bottom controls
         Positioned(
           bottom: 30, right: 30,
           child: Row(children: [
@@ -351,23 +466,44 @@ class _AttendanceModeState extends State<AttendanceMode> {
             ),
           ]),
         ),
-        Positioned(
-          bottom: 30, left: 30,
-          child: GestureDetector(
-            onTap: () async {
-              if (!_controller.value.isInitialized) return;
-              await _captureAndRecognize();
-            },
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.blue.withAlpha(200), borderRadius: BorderRadius.circular(12)),
-              child: const Icon(Icons.camera_alt, color: Colors.white, size: 32),
-            ),
-          ),
-        ),
       ],
     );
   }
+}
+
+class ScannerCornerPainter extends CustomPainter {
+  final Color color;
+  ScannerCornerPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke;
+
+    const len = 40.0;
+    const inset = 20.0;
+
+    // Top-left
+    canvas.drawLine(const Offset(inset, inset), const Offset(inset + len, inset), paint);
+    canvas.drawLine(const Offset(inset, inset), const Offset(inset, inset + len), paint);
+
+    // Top-right
+    canvas.drawLine(Offset(size.width - inset, inset), Offset(size.width - inset - len, inset), paint);
+    canvas.drawLine(Offset(size.width - inset, inset), Offset(size.width - inset, inset + len), paint);
+
+    // Bottom-left
+    canvas.drawLine(Offset(inset, size.height - inset), Offset(inset + len, size.height - inset), paint);
+    canvas.drawLine(Offset(inset, size.height - inset), Offset(inset, size.height - inset - len), paint);
+
+    // Bottom-right
+    canvas.drawLine(Offset(size.width - inset, size.height - inset), Offset(size.width - inset - len, size.height - inset), paint);
+    canvas.drawLine(Offset(size.width - inset, size.height - inset), Offset(size.width - inset, size.height - inset - len), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class EnrollmentMode extends StatefulWidget {
@@ -400,6 +536,9 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
   String _resultMessage = '';
   bool _resultSuccess = false;
   XFile? _lastCapture;
+  bool _isDuplicateCheckRunning = false;
+  String _duplicateWarning = '';
+  bool _isDuplicate = false;
 
   @override
   void initState() {
@@ -434,7 +573,7 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
   Future<void> _fetchEmployees() async {
     try {
       final response = await http.get(
-        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/employees?limit=200'),
+        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/employees?limit=500'),
         headers: _headers,
       );
       if (response.statusCode == 200) {
@@ -444,28 +583,103 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
           _loadingEmployees = false;
         });
       } else {
-        setState(() { _loadingEmployees = false; _resultMessage = 'Failed to load employees'; });
+        setState(() {
+          _loadingEmployees = false;
+          _resultMessage = 'Failed to load employees';
+        });
       }
     } catch (e) {
-      setState(() { _loadingEmployees = false; _resultMessage = 'Connection error'; });
+      setState(() {
+        _loadingEmployees = false;
+        _resultMessage = 'Connection error';
+      });
     }
   }
 
   Future<void> _capturePhoto() async {
     if (!_controller.value.isInitialized || _isCapturing) return;
-    setState(() { _isCapturing = true; _resultMessage = ''; });
+    setState(() {
+      _isCapturing = true;
+      _resultMessage = '';
+      _duplicateWarning = '';
+    });
 
     try {
       final image = await _controller.takePicture();
-      setState(() { _lastCapture = image; _isCapturing = false; });
+      setState(() {
+        _lastCapture = image;
+        _isCapturing = false;
+      });
+      // Auto check duplicate after capture
+      if (_selectedEmployeeId != null) {
+        _checkDuplicate();
+      }
     } catch (e) {
-      setState(() { _isCapturing = false; _resultMessage = 'Capture failed: $e'; });
+      setState(() {
+        _isCapturing = false;
+        _resultMessage = 'Capture failed: $e';
+      });
+    }
+  }
+
+  Future<void> _checkDuplicate() async {
+    if (_lastCapture == null) return;
+    setState(() {
+      _isDuplicateCheckRunning = true;
+      _duplicateWarning = '';
+      _isDuplicate = false;
+    });
+
+    try {
+      final bytes = await _lastCapture!.readAsBytes();
+      var req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/check-duplicate?exclude_employee_id=$_selectedEmployeeId'),
+      );
+      if (widget.authToken != null) req.headers['Authorization'] = 'Bearer ${widget.authToken}';
+      req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'check.jpg'));
+
+      var res = await req.send();
+      var response = await http.Response.fromStream(res);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['duplicate'] == true) {
+          setState(() {
+            _isDuplicate = true;
+            _duplicateWarning = '⚠️ Face already registered to: ${data['existing_employee_name']} (${data['existing_employee_code']}) — ENROLLMENT BLOCKED';
+          });
+        } else {
+          setState(() {
+            _isDuplicate = false;
+            _duplicateWarning = '✅ Face is unique — safe to enroll';
+          });
+        }
+      }
+    } catch (e) {
+      setState(() => _isDuplicate = false);
+    } finally {
+      setState(() => _isDuplicateCheckRunning = false);
     }
   }
 
   Future<void> _enrollFace() async {
     if (_lastCapture == null || _selectedEmployeeId == null) return;
-    setState(() { _isUploading = true; _resultMessage = ''; });
+
+    // Block enrollment if duplicate detected
+    if (_isDuplicate) {
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = '❌ Cannot enroll — this face is already registered to another employee';
+      });
+      return;
+    }
+
+    setState(() {
+      _isUploading = true;
+      _resultMessage = '';
+      _duplicateWarning = '';
+    });
 
     try {
       final bytes = await _lastCapture!.readAsBytes();
@@ -484,7 +698,9 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
           _resultSuccess = true;
           _resultMessage = 'Face enrolled successfully for $_selectedEmployeeName!';
           _lastCapture = null;
+          _duplicateWarning = '';
         });
+        _fetchEmployees(); // Refresh enrollment status
       } else {
         final body = json.decode(response.body);
         setState(() {
@@ -493,7 +709,10 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
         });
       }
     } catch (e) {
-      setState(() { _resultSuccess = false; _resultMessage = 'Upload error: $e'; });
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = 'Upload error: $e';
+      });
     } finally {
       setState(() => _isUploading = false);
     }
@@ -584,7 +803,11 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       GestureDetector(
-                        onTap: () => setState(() => _lastCapture = null),
+                        onTap: () => setState(() {
+                          _lastCapture = null;
+                          _duplicateWarning = '';
+                          _isDuplicate = false;
+                        }),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                           decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)),
@@ -593,13 +816,19 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
                       ),
                       const SizedBox(width: 20),
                       GestureDetector(
-                        onTap: _isUploading ? null : _enrollFace,
+                        onTap: (_isUploading || _isDuplicate || _isDuplicateCheckRunning) ? null : _enrollFace,
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                          decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(12)),
+                          decoration: BoxDecoration(
+                            color: _isDuplicate ? Colors.grey : Colors.green,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                           child: _isUploading
                               ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                              : const Text('Enroll', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                              : Text(
+                                  _isDuplicate ? 'Blocked' : 'Enroll',
+                                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                                ),
                         ),
                       ),
                     ],
@@ -608,6 +837,23 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
             ],
           ),
         ),
+        // Duplicate check warning
+        if (_duplicateWarning.isNotEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            color: _isDuplicate ? Colors.red.shade100 : Colors.green.shade100,
+            child: Text(
+              _duplicateWarning,
+              style: TextStyle(
+                color: _isDuplicate ? Colors.red.shade900 : Colors.green.shade900,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        // Result message
         if (_resultMessage.isNotEmpty)
           Container(
             width: double.infinity,
@@ -615,7 +861,11 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
             color: _resultSuccess ? Colors.green.shade100 : Colors.red.shade100,
             child: Text(
               _resultMessage,
-              style: TextStyle(color: _resultSuccess ? Colors.green.shade900 : Colors.red.shade900, fontSize: 16, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: _resultSuccess ? Colors.green.shade900 : Colors.red.shade900,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
               textAlign: TextAlign.center,
             ),
           ),
@@ -642,7 +892,11 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
                             title: Text(emp['full_name'] ?? 'Unknown'),
                             subtitle: Text(emp['employee_code'] ?? ''),
                             trailing: isEnrolled
-                                ? const Chip(label: Text('Enrolled', style: TextStyle(fontSize: 11)), color: WidgetStatePropertyAll(Colors.green), visualDensity: VisualDensity.compact)
+                                ? const Chip(
+                                    label: Text('Enrolled', style: TextStyle(fontSize: 11)),
+                                    color: WidgetStatePropertyAll(Colors.green),
+                                    visualDensity: VisualDensity.compact,
+                                  )
                                 : null,
                             onTap: () {
                               setState(() {
@@ -650,6 +904,8 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
                                 _selectedEmployeeName = emp['full_name'] ?? 'Unknown';
                                 _lastCapture = null;
                                 _resultMessage = '';
+                                _duplicateWarning = '';
+                                _isDuplicate = false;
                               });
                             },
                           ),
