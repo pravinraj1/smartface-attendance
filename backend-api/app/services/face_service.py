@@ -2,24 +2,28 @@ from typing import Optional, Tuple, List
 import os
 import hashlib
 import struct
+import io
 
 
 class FaceService:
     def __init__(self):
         self.app = None
         self._initialized = False
-        self._np = None
-        self._cv2 = None
-        self._mode = None
+        self._mode = "pillow"
 
     def initialize(self):
         if self._initialized:
             return
+        os.environ.setdefault("FACE_MODE", "pillow")
+        mode = os.environ.get("FACE_MODE", "pillow")
+        if mode == "pillow":
+            self._mode = "pillow"
+            self._initialized = True
+            print("Face service: Pillow mode (lightweight)")
+            return
         try:
             import cv2
             import numpy as np
-            self._cv2 = cv2
-            self._np = np
             from insightface.app import FaceAnalysis
             self.app = FaceAnalysis(
                 name="buffalo_s",
@@ -28,100 +32,30 @@ class FaceService:
             self.app.prepare(ctx_id=0, det_size=(640, 640))
             self._mode = "insightface"
             self._initialized = True
-            print("InsightFace initialized successfully")
+            print("Face service: InsightFace mode")
         except Exception as e:
-            print(f"InsightFace init failed: {e}")
-            try:
-                import cv2
-                import numpy as np
-                self._cv2 = cv2
-                self._np = np
-                self._mode = "opencv"
-                print("Using OpenCV fallback")
-            except Exception as e2:
-                print(f"OpenCV also failed: {e2}, using Pillow fallback")
-                self._mode = "pillow"
+            print(f"InsightFace init failed: {e}, using Pillow fallback")
+            self._mode = "pillow"
             self._initialized = True
 
     def detect_and_embed(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
         self.initialize()
-
-        if self._mode == "insightface":
-            return self._detect_insightface(image_bytes)
-        elif self._mode == "opencv":
-            return self._detect_opencv(image_bytes)
-        else:
-            return self._detect_pillow(image_bytes)
-
-    def _detect_insightface(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
-        np = self._np
-        cv2 = self._cv2
-        try:
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if image is None:
-                return None, None
-            faces = self.app.get(image)
-            if not faces:
-                return None, None
-            best_face = max(faces, key=lambda f: f.det_score)
-            bbox = best_face.bbox.astype(int)
-            return best_face.embedding.tolist(), {
-                "bbox": {"x": int(bbox[0]), "y": int(bbox[1]), "width": int(bbox[2] - bbox[0]), "height": int(bbox[3] - bbox[1])},
-                "confidence": float(best_face.det_score),
-                "quality": self._compute_quality_cv(image, bbox),
-            }
-        except Exception as e:
-            print(f"InsightFace error: {e}")
-            return None, None
-
-    def _detect_opencv(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
-        np = self._np
-        cv2 = self._cv2
-        try:
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if image is None:
-                return None, None
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(100, 100))
-            if len(faces) == 0:
-                return None, None
-            x, y, w, h = faces[0]
-            embedding = np.random.randn(512).astype(np.float32)
-            embedding = embedding / np.linalg.norm(embedding)
-            return embedding.tolist(), {
-                "bbox": {"x": int(x), "y": int(y), "width": int(w), "height": int(h)},
-                "confidence": 0.85,
-                "quality": 0.80,
-            }
-        except Exception as e:
-            print(f"OpenCV error: {e}")
-            return None, None
-
-    def _detect_pillow(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
         try:
             from PIL import Image
-            import io
-
             img = Image.open(io.BytesIO(image_bytes))
             img = img.convert("RGB")
-
             w, h = img.size
             if w < 50 or h < 50:
                 return None, None
-
             embedding = self._image_to_embedding(img)
             quality = min(1.0, (w * h) / (300 * 300))
-
             return embedding, {
                 "bbox": {"x": 0, "y": 0, "width": w, "height": h},
                 "confidence": 0.80,
                 "quality": quality,
             }
         except Exception as e:
-            print(f"Pillow fallback error: {e}")
+            print(f"Face detect error: {e}")
             return None, None
 
     def _image_to_embedding(self, img) -> List[float]:
@@ -142,26 +76,6 @@ class FaceService:
         if norm > 0:
             embedding = [x / norm for x in embedding]
         return embedding
-
-    def _compute_quality_cv(self, image, bbox) -> float:
-        cv2 = self._cv2
-        np = self._np
-        try:
-            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-            face_region = image[max(0, y1):y2, max(0, x1):x2]
-            if face_region.size == 0:
-                return 0.5
-            gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
-            brightness = np.mean(gray)
-            contrast = np.std(gray)
-            sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
-            quality = 0.0
-            quality += 0.3 if 60 < brightness < 200 else 0.1
-            quality += 0.3 if contrast > 30 else 0.1
-            quality += 0.4 if sharpness > 50 else 0.2
-            return min(1.0, quality)
-        except Exception:
-            return 0.75
 
     def compare_embeddings(
         self,

@@ -4,29 +4,21 @@ import 'package:camera/camera.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
-import 'dart:io';
 
 const String kApiPrefix = '/api/v1';
 const String kDefaultIp = '192.168.1.8';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  if (kIsWeb) {
-    final cameras = await availableCameras();
-    runApp(MyApp(cameras: cameras, serverIp: ''));
-  } else {
-    final cameras = await availableCameras();
-    final prefs = await SharedPreferences.getInstance();
-    final savedIp = prefs.getString('server_ip') ?? kDefaultIp;
-    runApp(MyApp(cameras: cameras, serverIp: savedIp));
-  }
+  final cameras = await availableCameras();
+  final prefs = await SharedPreferences.getInstance();
+  final savedIp = kIsWeb ? '' : (prefs.getString('server_ip') ?? kDefaultIp);
+  runApp(MyApp(cameras: cameras, serverIp: savedIp));
 }
 
 class MyApp extends StatelessWidget {
   final List<CameraDescription> cameras;
   final String serverIp;
-
   const MyApp({super.key, required this.cameras, required this.serverIp});
 
   @override
@@ -37,39 +29,29 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: KioskScreen(cameras: cameras, serverIp: serverIp),
+      home: KioskHome(cameras: cameras, serverIp: serverIp),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-class KioskScreen extends StatefulWidget {
+class KioskHome extends StatefulWidget {
   final List<CameraDescription> cameras;
   final String serverIp;
-
-  const KioskScreen({super.key, required this.cameras, required this.serverIp});
+  const KioskHome({super.key, required this.cameras, required this.serverIp});
 
   @override
-  State<KioskScreen> createState() => _KioskScreenState();
+  State<KioskHome> createState() => _KioskHomeState();
 }
 
-class _KioskScreenState extends State<KioskScreen> {
-  late CameraController _controller;
-  late Future<void> _initializeControllerFuture;
-  String _status = 'Initializing...';
-  String _employeeName = '';
-  String _employeeCode = '';
-  bool _isProcessing = false;
-  String? _authToken;
-  int _recognitionCount = 0;
-  int _currentCameraIndex = 0;
+class _KioskHomeState extends State<KioskHome> {
+  int _currentMode = 0;
   late String _serverIp;
+  String? _authToken;
 
   String get kApiBaseUrl {
-    if (kIsWeb) {
-      final origin = Uri.base.origin;
-      return origin;
-    }
+    if (kIsWeb) return Uri.base.origin;
+    if (_serverIp.startsWith('http')) return _serverIp;
     return 'http://$_serverIp:8080';
   }
 
@@ -77,26 +59,24 @@ class _KioskScreenState extends State<KioskScreen> {
   void initState() {
     super.initState();
     _serverIp = widget.serverIp;
-    _initCamera(widget.cameras[_currentCameraIndex]);
     _login();
   }
 
-  void _initCamera(CameraDescription camera) {
-    _controller = CameraController(
-      camera,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-    _initializeControllerFuture = _controller.initialize();
-  }
-
-  Future<void> _switchCamera() async {
-    if (widget.cameras.length < 2) return;
-    await _controller.dispose();
-    _currentCameraIndex = (_currentCameraIndex + 1) % widget.cameras.length;
-    setState(() {
-      _initCamera(widget.cameras[_currentCameraIndex]);
-    });
+  Future<void> _login() async {
+    try {
+      final response = await http.post(
+        Uri.parse('$kApiBaseUrl$kApiPrefix/auth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'email': 'admin@smartface.com', 'password': 'Admin123!'}),
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        _authToken = data['access_token'];
+        setState(() {});
+      }
+    } catch (e) {
+      debugPrint('Login failed: $e');
+    }
   }
 
   void _showSettings() {
@@ -108,17 +88,13 @@ class _KioskScreenState extends State<KioskScreen> {
         content: TextField(
           controller: controller,
           decoration: const InputDecoration(
-            labelText: 'Server IP Address',
-            hintText: 'e.g. 192.168.1.8',
+            labelText: 'Server IP or URL',
+            hintText: 'e.g. 192.168.1.8 or https://your-app.onrender.com',
             border: OutlineInputBorder(),
           ),
-          keyboardType: TextInputType.number,
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () async {
               final newIp = controller.text.trim();
@@ -127,7 +103,6 @@ class _KioskScreenState extends State<KioskScreen> {
                 await prefs.setString('server_ip', newIp);
                 setState(() {
                   _serverIp = newIp;
-                  _status = 'Connecting to $newIp...';
                   _authToken = null;
                 });
                 Navigator.pop(context);
@@ -142,60 +117,88 @@ class _KioskScreenState extends State<KioskScreen> {
   }
 
   @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: _currentMode == 0
+          ? AttendanceMode(
+              key: ValueKey('att_$_serverIp'),
+              cameras: widget.cameras,
+              apiBaseUrl: kApiBaseUrl,
+              authToken: _authToken,
+              onSettings: _showSettings,
+            )
+          : EnrollmentMode(
+              key: ValueKey('enr_$_serverIp'),
+              cameras: widget.cameras,
+              apiBaseUrl: kApiBaseUrl,
+              authToken: _authToken,
+              onSettings: _showSettings,
+            ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentMode,
+        onDestinationSelected: (i) => setState(() => _currentMode = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.face), label: 'Attendance'),
+          NavigationDestination(icon: Icon(Icons.person_add), label: 'Enrollment'),
+        ],
+      ),
+    );
+  }
+}
+
+class AttendanceMode extends StatefulWidget {
+  final List<CameraDescription> cameras;
+  final String apiBaseUrl;
+  final String? authToken;
+  final VoidCallback onSettings;
+  const AttendanceMode({
+    super.key,
+    required this.cameras,
+    required this.apiBaseUrl,
+    required this.authToken,
+    required this.onSettings,
+  });
+
+  @override
+  State<AttendanceMode> createState() => _AttendanceModeState();
+}
+
+class _AttendanceModeState extends State<AttendanceMode> {
+  late CameraController _controller;
+  late Future<void> _initFuture;
+  String _status = 'Initializing...';
+  String _employeeName = '';
+  String _employeeCode = '';
+  bool _isProcessing = false;
+  int _recognitionCount = 0;
+  int _camIdx = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCamera(widget.cameras[_camIdx]);
+  }
+
+  void _initCamera(CameraDescription cam) {
+    _controller = CameraController(cam, ResolutionPreset.high, enableAudio: false);
+    _initFuture = _controller.initialize();
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
 
-  Future<void> _login() async {
-    try {
-      final response = await http.post(
-        Uri.parse('$kApiBaseUrl$kApiPrefix/auth/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'email': 'admin@smartface.com',
-          'password': 'Admin123!',
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        _authToken = data['access_token'];
-        setState(() {
-          _status = 'Ready for attendance';
-        });
-        _startContinuousDetection();
-      } else {
-        setState(() {
-          _status = 'Auth failed: ${response.statusCode}';
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _status = 'Server unreachable. Check connection.';
-      });
-      await Future.delayed(const Duration(seconds: 5));
-      _login();
-    }
-  }
-
-  Map<String, String> get _headers => {
-        'Content-Type': 'application/json',
-        if (_authToken != null) 'Authorization': 'Bearer $_authToken',
-      };
-
-  Future<void> _startContinuousDetection() async {
-    while (mounted) {
-      if (!_isProcessing) {
-        await _captureAndRecognize();
-      }
-      await Future.delayed(const Duration(seconds: 2));
-    }
+  Future<void> _switchCamera() async {
+    if (widget.cameras.length < 2) return;
+    await _controller.dispose();
+    _camIdx = (_camIdx + 1) % widget.cameras.length;
+    setState(() => _initCamera(widget.cameras[_camIdx]));
   }
 
   Future<void> _captureAndRecognize() async {
     if (!_controller.value.isInitialized || _isProcessing) return;
-
     setState(() {
       _isProcessing = true;
       _status = 'Detecting face...';
@@ -205,32 +208,20 @@ class _KioskScreenState extends State<KioskScreen> {
       final XFile image = await _controller.takePicture();
       final bytes = await image.readAsBytes();
 
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse('$kApiBaseUrl$kApiPrefix/faces/recognize'),
-      );
-      if (_authToken != null) {
-        request.headers['Authorization'] = 'Bearer $_authToken';
-      }
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          'file',
-          bytes,
-          filename: 'capture.jpg',
-        ),
-      );
+      var req = http.MultipartRequest('POST', Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/recognize'));
+      if (widget.authToken != null) req.headers['Authorization'] = 'Bearer ${widget.authToken}';
+      req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'capture.jpg'));
 
-      var streamedResponse = await request.send();
-      var response = await http.Response.fromStream(streamedResponse);
+      var res = await req.send();
+      var response = await http.Response.fromStream(res);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-
         if (data['recognized'] == true) {
           final employeeId = data['employee_id'] ?? '';
           final name = data['employee_name'] ?? 'Unknown';
           final code = data['employee_code'] ?? '';
-          final confidence = data['confidence'] ?? 0;
+          final confidence = data['confidence'] ?? 0.0;
 
           setState(() {
             _employeeName = name;
@@ -239,300 +230,434 @@ class _KioskScreenState extends State<KioskScreen> {
             _recognitionCount++;
           });
 
-          await _recordAttendance(employeeId, confidence);
+          await http.post(
+            Uri.parse('${widget.apiBaseUrl}$kApiPrefix/attendance/checkin'),
+            headers: {'Content-Type': 'application/json', if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}'},
+            body: json.encode({'employee_id': employeeId, 'confidence_score': confidence}),
+          );
 
           await Future.delayed(const Duration(seconds: 3));
-
-          setState(() {
-            _status = 'Ready for attendance';
-            _employeeName = '';
-            _employeeCode = '';
-          });
+          setState(() { _status = 'Ready for attendance'; _employeeName = ''; _employeeCode = ''; });
         } else {
-          setState(() {
-            _status = 'FACE NOT RECOGNIZED';
-          });
-
+          setState(() => _status = 'FACE NOT RECOGNIZED');
           await Future.delayed(const Duration(seconds: 2));
-
-          setState(() {
-            _status = 'Ready for attendance';
-          });
+          setState(() => _status = 'Ready for attendance');
         }
-      } else if (response.statusCode == 401) {
-        setState(() {
-          _status = 'Session expired. Reconnecting...';
-        });
-        await _login();
       } else {
-        setState(() {
-          _status = 'Error ${response.statusCode}';
-        });
+        setState(() => _status = 'Error ${response.statusCode}');
         await Future.delayed(const Duration(seconds: 2));
-        setState(() {
-          _status = 'Ready for attendance';
-        });
+        setState(() => _status = 'Ready for attendance');
       }
     } catch (e) {
-      setState(() {
-        _status = 'Connection error';
-      });
+      setState(() => _status = 'Connection error');
       await Future.delayed(const Duration(seconds: 3));
-      setState(() {
-        _status = 'Ready for attendance';
-      });
+      setState(() => _status = 'Ready for attendance');
     } finally {
-      setState(() {
-        _isProcessing = false;
-      });
-    }
-  }
-
-  Future<void> _recordAttendance(String employeeId, double confidence) async {
-    try {
-      final response = await http.post(
-        Uri.parse('$kApiBaseUrl$kApiPrefix/attendance/checkin'),
-        headers: _headers,
-        body: json.encode({
-          'employee_id': employeeId,
-          'confidence_score': confidence,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        debugPrint('Attendance record failed: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('Attendance error: $e');
+      setState(() => _isProcessing = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          FutureBuilder<void>(
-            future: _initializeControllerFuture,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.done) {
-                return CameraPreview(_controller);
-              } else {
-                return const Center(
-                  child: CircularProgressIndicator(color: Colors.white),
-                );
-              }
-            },
-          ),
-
-          Container(
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: _status == 'CHECK-IN SUCCESS'
-                    ? Colors.green
-                    : _status == 'FACE NOT RECOGNIZED'
-                        ? Colors.red
-                        : Colors.blue,
-                width: 4,
-              ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        FutureBuilder<void>(
+          future: _initFuture,
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.done) return CameraPreview(_controller);
+            return const Center(child: CircularProgressIndicator(color: Colors.white));
+          },
+        ),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: _status == 'CHECK-IN SUCCESS' ? Colors.green : _status == 'FACE NOT RECOGNIZED' ? Colors.red : Colors.blue,
+              width: 4,
             ),
           ),
-
+        ),
+        Positioned(
+          top: 50, left: 0, right: 0,
+          child: Column(children: [
+            const Text('SMARTFACE', style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Text(_status, style: TextStyle(
+              color: _status == 'CHECK-IN SUCCESS' ? Colors.green : _status == 'FACE NOT RECOGNIZED' ? Colors.red : Colors.white,
+              fontSize: 24, fontWeight: FontWeight.bold,
+            )),
+            const SizedBox(height: 5),
+            Text(DateTime.now().toString().substring(0, 16), style: const TextStyle(color: Colors.white70, fontSize: 16)),
+          ]),
+        ),
+        if (_employeeName.isNotEmpty)
           Positioned(
-            top: 50,
-            left: 0,
-            right: 0,
+            bottom: 100, left: 40, right: 40,
             child: Container(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  const Text(
-                    'SMARTFACE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    _status,
-                    style: TextStyle(
-                      color: _status == 'CHECK-IN SUCCESS'
-                          ? Colors.green
-                          : _status == 'FACE NOT RECOGNIZED'
-                              ? Colors.red
-                              : Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    DateTime.now().toString().substring(0, 16),
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
-                    ),
-                  ),
-                ],
-              ),
+              padding: const EdgeInsets.all(30),
+              decoration: BoxDecoration(color: Colors.black.withAlpha(204), borderRadius: BorderRadius.circular(20)),
+              child: Column(children: [
+                const Icon(Icons.check_circle, color: Colors.green, size: 80),
+                const SizedBox(height: 20),
+                const Text('WELCOME', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 10),
+                Text(_employeeName, style: const TextStyle(color: Colors.white, fontSize: 24)),
+                if (_employeeCode.isNotEmpty) Text(_employeeCode, style: const TextStyle(color: Colors.grey, fontSize: 16)),
+                const SizedBox(height: 10),
+                Text(DateTime.now().toString().substring(11, 16), style: const TextStyle(color: Colors.white, fontSize: 20)),
+              ]),
             ),
           ),
-
-          if (_employeeName.isNotEmpty)
-            Positioned(
-              bottom: 100,
-              left: 0,
-              right: 0,
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 40),
-                padding: const EdgeInsets.all(30),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.8),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Column(
-                  children: [
-                    const Icon(
-                      Icons.check_circle,
-                      color: Colors.green,
-                      size: 80,
-                    ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'WELCOME',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      _employeeName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                      ),
-                    ),
-                    if (_employeeCode.isNotEmpty)
-                      Text(
-                        _employeeCode,
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontSize: 16,
-                        ),
-                      ),
-                    const SizedBox(height: 10),
-                    Text(
-                      DateTime.now().toString().substring(11, 16),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          if (_status == 'FACE NOT RECOGNIZED')
-            Positioned(
-              bottom: 100,
-              left: 0,
-              right: 0,
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 40),
-                padding: const EdgeInsets.all(30),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.8),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Column(
-                  children: [
-                    Icon(
-                      Icons.error_outline,
-                      color: Colors.red,
-                      size: 80,
-                    ),
-                    SizedBox(height: 20),
-                    Text(
-                      'FACE NOT RECOGNIZED',
-                      style: TextStyle(
-                        color: Colors.red,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    SizedBox(height: 10),
-                    Text(
-                      'PLEASE CONTACT HR',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
+        if (_status == 'FACE NOT RECOGNIZED')
           Positioned(
-            bottom: 30,
-            right: 30,
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Scans: $_recognitionCount',
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+            bottom: 100, left: 40, right: 40,
+            child: Container(
+              padding: const EdgeInsets.all(30),
+              decoration: BoxDecoration(color: Colors.black.withAlpha(204), borderRadius: BorderRadius.circular(20)),
+              child: const Column(children: [
+                Icon(Icons.error_outline, color: Colors.red, size: 80),
+                SizedBox(height: 20),
+                Text('FACE NOT RECOGNIZED', style: TextStyle(color: Colors.red, fontSize: 24, fontWeight: FontWeight.bold)),
+                SizedBox(height: 10),
+                Text('PLEASE CONTACT HR', style: TextStyle(color: Colors.white, fontSize: 18)),
+              ]),
+            ),
+          ),
+        Positioned(
+          bottom: 30, right: 30,
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(color: Colors.black.withAlpha(153), borderRadius: BorderRadius.circular(8)),
+              child: Text('Scans: $_recognitionCount', style: const TextStyle(color: Colors.white70, fontSize: 14)),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: _switchCamera,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.black.withAlpha(153), borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.cameraswitch, color: Colors.white70, size: 28),
+              ),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: widget.onSettings,
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: Colors.black.withAlpha(153), borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.settings, color: Colors.white70, size: 28),
+              ),
+            ),
+          ]),
+        ),
+        Positioned(
+          bottom: 30, left: 30,
+          child: GestureDetector(
+            onTap: () async {
+              if (!_controller.value.isInitialized) return;
+              await _captureAndRecognize();
+            },
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.blue.withAlpha(200), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.camera_alt, color: Colors.white, size: 32),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class EnrollmentMode extends StatefulWidget {
+  final List<CameraDescription> cameras;
+  final String apiBaseUrl;
+  final String? authToken;
+  final VoidCallback onSettings;
+  const EnrollmentMode({
+    super.key,
+    required this.cameras,
+    required this.apiBaseUrl,
+    required this.authToken,
+    required this.onSettings,
+  });
+
+  @override
+  State<EnrollmentMode> createState() => _EnrollmentModeState();
+}
+
+class _EnrollmentModeState extends State<EnrollmentMode> {
+  late CameraController _controller;
+  late Future<void> _initFuture;
+  int _camIdx = 0;
+  List<dynamic> _employees = [];
+  String? _selectedEmployeeId;
+  String _selectedEmployeeName = '';
+  bool _loadingEmployees = true;
+  bool _isCapturing = false;
+  bool _isUploading = false;
+  String _resultMessage = '';
+  bool _resultSuccess = false;
+  XFile? _lastCapture;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCamera(widget.cameras[_camIdx]);
+    _fetchEmployees();
+  }
+
+  void _initCamera(CameraDescription cam) {
+    _controller = CameraController(cam, ResolutionPreset.high, enableAudio: false);
+    _initFuture = _controller.initialize();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _switchCamera() async {
+    if (widget.cameras.length < 2) return;
+    await _controller.dispose();
+    _camIdx = (_camIdx + 1) % widget.cameras.length;
+    setState(() => _initCamera(widget.cameras[_camIdx]));
+  }
+
+  Map<String, String> get _headers => {
+    'Content-Type': 'application/json',
+    if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+  };
+
+  Future<void> _fetchEmployees() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/employees?limit=200'),
+        headers: _headers,
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        setState(() {
+          _employees = data['employees'] ?? [];
+          _loadingEmployees = false;
+        });
+      } else {
+        setState(() { _loadingEmployees = false; _resultMessage = 'Failed to load employees'; });
+      }
+    } catch (e) {
+      setState(() { _loadingEmployees = false; _resultMessage = 'Connection error'; });
+    }
+  }
+
+  Future<void> _capturePhoto() async {
+    if (!_controller.value.isInitialized || _isCapturing) return;
+    setState(() { _isCapturing = true; _resultMessage = ''; });
+
+    try {
+      final image = await _controller.takePicture();
+      setState(() { _lastCapture = image; _isCapturing = false; });
+    } catch (e) {
+      setState(() { _isCapturing = false; _resultMessage = 'Capture failed: $e'; });
+    }
+  }
+
+  Future<void> _enrollFace() async {
+    if (_lastCapture == null || _selectedEmployeeId == null) return;
+    setState(() { _isUploading = true; _resultMessage = ''; });
+
+    try {
+      final bytes = await _lastCapture!.readAsBytes();
+      var req = http.MultipartRequest(
+        'POST',
+        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/enroll?employee_id=$_selectedEmployeeId'),
+      );
+      if (widget.authToken != null) req.headers['Authorization'] = 'Bearer ${widget.authToken}';
+      req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'face.jpg'));
+
+      var res = await req.send();
+      var response = await http.Response.fromStream(res);
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _resultSuccess = true;
+          _resultMessage = 'Face enrolled successfully for $_selectedEmployeeName!';
+          _lastCapture = null;
+        });
+      } else {
+        final body = json.decode(response.body);
+        setState(() {
+          _resultSuccess = false;
+          _resultMessage = body['detail'] ?? 'Enrollment failed (${response.statusCode})';
+        });
+      }
+    } catch (e) {
+      setState(() { _resultSuccess = false; _resultMessage = 'Upload error: $e'; });
+    } finally {
+      setState(() => _isUploading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasCapture = _lastCapture != null;
+    final hasEmployee = _selectedEmployeeId != null;
+
+    return Column(
+      children: [
+        Expanded(
+          flex: 3,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              FutureBuilder<void>(
+                future: _initFuture,
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.done) return CameraPreview(_controller);
+                  return const Center(child: CircularProgressIndicator());
+                },
+              ),
+              Positioned(
+                top: 20, left: 0, right: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: [
+                      Text(
+                        hasEmployee ? 'Enrolling: $_selectedEmployeeName' : 'Select employee first',
+                        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        DateTime.now().toString().substring(0, 16),
+                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 10),
-                GestureDetector(
+              ),
+              Positioned(
+                bottom: 20, right: 20,
+                child: GestureDetector(
                   onTap: _switchCamera,
                   child: Container(
                     padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(
-                      Icons.cameraswitch,
-                      color: Colors.white70,
-                      size: 28,
-                    ),
+                    decoration: BoxDecoration(color: Colors.black.withAlpha(153), borderRadius: BorderRadius.circular(8)),
+                    child: const Icon(Icons.cameraswitch, color: Colors.white70, size: 28),
                   ),
                 ),
-                const SizedBox(width: 10),
-                GestureDetector(
-                  onTap: _showSettings,
+              ),
+              Positioned(
+                bottom: 20, left: 20,
+                child: GestureDetector(
+                  onTap: widget.onSettings,
                   child: Container(
                     padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(
-                      Icons.settings,
-                      color: Colors.white70,
-                      size: 28,
+                    decoration: BoxDecoration(color: Colors.black.withAlpha(153), borderRadius: BorderRadius.circular(8)),
+                    child: const Icon(Icons.settings, color: Colors.white70, size: 28),
+                  ),
+                ),
+              ),
+              if (!hasCapture)
+                Positioned(
+                  bottom: 20, left: 0, right: 0,
+                  child: Center(
+                    child: GestureDetector(
+                      onTap: hasEmployee ? _capturePhoto : null,
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: hasEmployee ? Colors.blue : Colors.grey,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.camera_alt, color: Colors.white, size: 36),
+                      ),
                     ),
                   ),
                 ),
-              ],
+              if (hasCapture)
+                Positioned(
+                  bottom: 20, left: 0, right: 0,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      GestureDetector(
+                        onTap: () => setState(() => _lastCapture = null),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                          decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(12)),
+                          child: const Text('Retake', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      const SizedBox(width: 20),
+                      GestureDetector(
+                        onTap: _isUploading ? null : _enrollFace,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                          decoration: BoxDecoration(color: Colors.green, borderRadius: BorderRadius.circular(12)),
+                          child: _isUploading
+                              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                              : const Text('Enroll', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        if (_resultMessage.isNotEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            color: _resultSuccess ? Colors.green.shade100 : Colors.red.shade100,
+            child: Text(
+              _resultMessage,
+              style: TextStyle(color: _resultSuccess ? Colors.green.shade900 : Colors.red.shade900, fontSize: 16, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
             ),
           ),
-        ],
-      ),
+        Expanded(
+          flex: 2,
+          child: _loadingEmployees
+              ? const Center(child: CircularProgressIndicator())
+              : _employees.isEmpty
+                  ? const Center(child: Text('No employees found. Create employees first.'))
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(8),
+                      itemCount: _employees.length,
+                      itemBuilder: (context, index) {
+                        final emp = _employees[index];
+                        final isSelected = emp['id'] == _selectedEmployeeId;
+                        final isEnrolled = emp['face_enrolled'] == true;
+                        return Card(
+                          color: isSelected ? Colors.blue.shade50 : null,
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: isEnrolled ? Colors.green : Colors.blue,
+                              child: Icon(isEnrolled ? Icons.check : Icons.person, color: Colors.white),
+                            ),
+                            title: Text(emp['full_name'] ?? 'Unknown'),
+                            subtitle: Text(emp['employee_code'] ?? ''),
+                            trailing: isEnrolled
+                                ? const Chip(label: Text('Enrolled', style: TextStyle(fontSize: 11)), color: WidgetStatePropertyAll(Colors.green), visualDensity: VisualDensity.compact)
+                                : null,
+                            onTap: () {
+                              setState(() {
+                                _selectedEmployeeId = emp['id'];
+                                _selectedEmployeeName = emp['full_name'] ?? 'Unknown';
+                                _lastCapture = null;
+                                _resultMessage = '';
+                              });
+                            },
+                          ),
+                        );
+                      },
+                    ),
+        ),
+      ],
     );
   }
 }
