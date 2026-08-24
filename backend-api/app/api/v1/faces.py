@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from pydantic import BaseModel
 from typing import Optional
 import os
 import uuid as uuid_lib
@@ -13,6 +14,7 @@ from app.core.config import settings
 from app.models.user import User
 from app.models.employee import Employee
 from app.models.face_profile import FaceProfile
+from app.models.attendance_log import AttendanceLog
 from app.schemas.face_profile import (
     FaceProfileResponse,
     FaceVerifyResponse,
@@ -22,46 +24,66 @@ from app.services.face_service import face_service
 router = APIRouter(prefix="/faces", tags=["Face Enrollment"])
 
 
+class FaceEnrollRequest(BaseModel):
+    employee_id: str
+    image_data: str
+
+
+class FaceRecognizeRequest(BaseModel):
+    image_data: str
+
+
+class CheckDuplicateRequest(BaseModel):
+    image: str
+    exclude_employee_id: Optional[str] = None
+
+
+def _decode_image(image_data: str) -> bytes:
+    if image_data.startswith("data:"):
+        header, b64data = image_data.split(",", 1)
+    else:
+        b64data = image_data
+    return base64.b64decode(b64data)
+
+
 @router.post("/enroll", response_model=FaceProfileResponse)
 async def enroll_face(
-    employee_id: str,
-    file: UploadFile = File(...),
+    body: FaceEnrollRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     employee_result = await db.execute(
-        select(Employee).where(Employee.id == employee_id)
+        select(Employee).where(Employee.id == body.employee_id)
     )
     employee = employee_result.scalar_one_or_none()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    content = await file.read()
+    image_bytes = _decode_image(body.image_data)
 
-    embedding, detection_info = face_service.detect_and_embed(content)
+    embedding, detection_info = face_service.detect_and_embed(image_bytes)
     if embedding is None:
         raise HTTPException(
             status_code=400,
             detail="No face detected in the image. Please upload a clear face photo.",
         )
 
-    file_ext = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
-    file_name = f"{uuid_lib.uuid4()}{file_ext}"
+    file_name = f"{uuid_lib.uuid4()}.jpg"
     relative_url = f"/api/v1/faces/image/{employee.employee_code}/{file_name}"
 
-    image_data_b64 = base64.b64encode(content).decode("utf-8")
+    image_data_b64 = base64.b64encode(image_bytes).decode("utf-8")
     embedding_json = face_service.embedding_to_json(embedding)
 
     quality_score = detection_info.get("quality", 0.75) if detection_info else 0.75
 
     existing = await db.execute(
-        select(FaceProfile).where(FaceProfile.employee_id == employee_id)
+        select(FaceProfile).where(FaceProfile.employee_id == body.employee_id)
     )
     existing_faces = existing.scalars().all()
     is_primary = len(existing_faces) == 0
 
     face_profile = FaceProfile(
-        employee_id=employee_id,
+        employee_id=body.employee_id,
         face_image_url=relative_url,
         face_image_data=image_data_b64,
         embedding_data=embedding_json,
@@ -166,12 +188,12 @@ def _load_known_embeddings(all_faces):
 
 @router.post("/recognize")
 async def recognize_face(
-    file: UploadFile = File(...),
+    body: FaceRecognizeRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    content = await file.read()
+    image_bytes = _decode_image(body.image_data)
 
-    query_embedding, detection_info = face_service.detect_and_embed(content)
+    query_embedding, detection_info = face_service.detect_and_embed(image_bytes)
     if query_embedding is None:
         return {
             "recognized": False,
@@ -221,17 +243,58 @@ async def recognize_face(
     }
 
 
+@router.get("/recognize/logs")
+async def get_recognition_logs(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(AttendanceLog)
+        .where(AttendanceLog.confidence_score.isnot(None))
+        .order_by(AttendanceLog.event_time.desc())
+        .limit(limit)
+    )
+    logs = result.scalars().all()
+
+    enriched = []
+    for log in logs:
+        emp_name = None
+        emp_code = None
+        if log.employee_id:
+            emp_result = await db.execute(
+                select(Employee).where(Employee.id == log.employee_id)
+            )
+            emp = emp_result.scalar_one_or_none()
+            if emp:
+                emp_name = emp.full_name
+                emp_code = emp.employee_code
+
+        enriched.append({
+            "id": log.id,
+            "employee_id": log.employee_id,
+            "employee_name": emp_name,
+            "employee_code": emp_code,
+            "confidence": float(log.confidence_score) if log.confidence_score else 0,
+            "recognized_at": log.event_time.isoformat() if log.event_time else None,
+            "recognition_method": log.event_type or "unknown",
+            "status": log.recognition_status or "unknown",
+        })
+
+    return {"logs": enriched}
+
+
 @router.post("/check-duplicate")
 async def check_duplicate_face(
-    exclude_employee_id: Optional[str] = None,
-    file: UploadFile = File(...),
+    body: CheckDuplicateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    content = await file.read()
+    image_bytes = _decode_image(body.image)
 
-    query_embedding, detection_info = face_service.detect_and_embed(content)
+    query_embedding, detection_info = face_service.detect_and_embed(image_bytes)
     if query_embedding is None:
         return {
+            "is_duplicate": False,
             "duplicate": False,
             "message": "No face detected",
         }
@@ -241,7 +304,7 @@ async def check_duplicate_face(
 
     known_embeddings = []
     for fp in all_faces:
-        if fp.employee_id == exclude_employee_id:
+        if fp.employee_id == body.exclude_employee_id:
             continue
         emb = None
         if fp.embedding_data:
@@ -255,6 +318,7 @@ async def check_duplicate_face(
 
     if not known_embeddings:
         return {
+            "is_duplicate": False,
             "duplicate": False,
             "message": "No existing face profiles to compare",
         }
@@ -263,6 +327,7 @@ async def check_duplicate_face(
 
     if match_result is None:
         return {
+            "is_duplicate": False,
             "duplicate": False,
             "message": "Face is unique",
         }
@@ -272,6 +337,7 @@ async def check_duplicate_face(
     employee = emp_result.scalar_one_or_none()
 
     return {
+        "is_duplicate": True,
         "duplicate": True,
         "message": f"This face is already enrolled to {employee.full_name if employee else 'Unknown'}",
         "existing_employee_id": matched_emp_id,
@@ -283,12 +349,12 @@ async def check_duplicate_face(
 
 @router.post("/verify", response_model=FaceVerifyResponse)
 async def verify_face(
-    file: UploadFile = File(...),
+    body: FaceRecognizeRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    content = await file.read()
+    image_bytes = _decode_image(body.image_data)
 
-    query_embedding, _ = face_service.detect_and_embed(content)
+    query_embedding, _ = face_service.detect_and_embed(image_bytes)
     if query_embedding is None:
         return FaceVerifyResponse(matched=False, employee_id=None, employee_name=None, confidence=0.0)
 

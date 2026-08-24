@@ -1,9 +1,31 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional
 from datetime import date, datetime
 import json
+
+
+class ERPConfigRequest(BaseModel):
+    erp_name: str = "Custom ERP"
+    erp_base_url: str = ""
+    erp_url: str = ""
+    erp_api_key: str = ""
+    api_key: str = ""
+    auth_type: str = "api_key"
+    export_format: str = "xml"
+    data_format: str = "xml"
+    push_enabled: bool = False
+    push_endpoint: str = ""
+    push_auth_header: str = ""
+    sync_enabled: bool = True
+    sync_interval_minutes: int = 15
+    endpoint_attendance: str = ""
+    endpoint_employees: str = ""
+    webhook_enabled: bool = False
+    webhook_url: str = ""
+    webhook_secret: str = ""
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -30,13 +52,22 @@ async def get_erp_config(
         "id": str(config.id),
         "erp_name": config.erp_name,
         "erp_url": config.erp_url,
+        "erp_base_url": config.erp_url,
+        "erp_api_key": config.api_key or "",
+        "api_key": config.api_key or "",
         "auth_type": config.auth_type,
         "data_format": config.data_format,
+        "export_format": config.data_format,
         "sync_enabled": config.sync_enabled,
+        "push_enabled": bool(config.endpoint_attendance),
+        "push_endpoint": config.endpoint_attendance or "",
+        "push_auth_header": config.api_key or "",
         "sync_interval_minutes": config.sync_interval_minutes,
         "last_sync_at": config.last_sync_at.isoformat() if config.last_sync_at else None,
         "last_sync_status": config.last_sync_status,
         "webhook_enabled": config.webhook_enabled,
+        "webhook_url": config.webhook_url or "",
+        "webhook_secret": config.webhook_secret or "",
         "endpoint_attendance": config.endpoint_attendance,
         "endpoint_employees": config.endpoint_employees,
     }
@@ -44,52 +75,46 @@ async def get_erp_config(
 
 @router.post("/config")
 async def save_erp_config(
-    erp_name: str = "Custom ERP",
-    erp_url: str = "",
-    api_key: str = "",
-    auth_type: str = "api_key",
-    data_format: str = "xml",
-    sync_enabled: bool = True,
-    sync_interval_minutes: int = 15,
-    endpoint_attendance: str = "",
-    endpoint_employees: str = "",
-    webhook_url: str = "",
-    webhook_secret: str = "",
-    webhook_enabled: bool = False,
+    body: ERPConfigRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    erp_url = body.erp_url or body.erp_base_url
+    api_key = body.api_key or body.erp_api_key
+    data_format = body.data_format or body.export_format
+    endpoint_attendance = body.endpoint_attendance or body.push_endpoint
+
     result = await db.execute(select(ERPConfig).limit(1))
     config = result.scalar_one_or_none()
 
     if config:
-        config.erp_name = erp_name
+        config.erp_name = body.erp_name
         config.erp_url = erp_url
         config.api_key = api_key
-        config.auth_type = auth_type
+        config.auth_type = body.auth_type
         config.data_format = data_format
-        config.sync_enabled = sync_enabled
-        config.sync_interval_minutes = sync_interval_minutes
+        config.sync_enabled = body.sync_enabled
+        config.sync_interval_minutes = body.sync_interval_minutes
         config.endpoint_attendance = endpoint_attendance
-        config.endpoint_employees = endpoint_employees
-        config.webhook_url = webhook_url
-        config.webhook_secret = webhook_secret
-        config.webhook_enabled = webhook_enabled
+        config.endpoint_employees = body.endpoint_employees
+        config.webhook_url = body.webhook_url
+        config.webhook_secret = body.webhook_secret
+        config.webhook_enabled = body.webhook_enabled
         config.updated_at = datetime.utcnow()
     else:
         config = ERPConfig(
-            erp_name=erp_name,
+            erp_name=body.erp_name,
             erp_url=erp_url,
             api_key=api_key,
-            auth_type=auth_type,
+            auth_type=body.auth_type,
             data_format=data_format,
-            sync_enabled=sync_enabled,
-            sync_interval_minutes=sync_interval_minutes,
+            sync_enabled=body.sync_enabled,
+            sync_interval_minutes=body.sync_interval_minutes,
             endpoint_attendance=endpoint_attendance,
-            endpoint_employees=endpoint_employees,
-            webhook_url=webhook_url,
-            webhook_secret=webhook_secret,
-            webhook_enabled=webhook_enabled,
+            endpoint_employees=body.endpoint_employees,
+            webhook_url=body.webhook_url,
+            webhook_secret=body.webhook_secret,
+            webhook_enabled=body.webhook_enabled,
         )
         db.add(config)
 
@@ -264,19 +289,21 @@ async def get_sync_logs(
         select(ERPsyncLog).order_by(ERPsyncLog.started_at.desc()).limit(limit)
     )
     logs = result.scalars().all()
-    return [
-        {
-            "id": str(log.id),
-            "sync_type": log.sync_type,
-            "direction": log.direction,
-            "status": log.status,
-            "records_count": log.records_count,
-            "error_message": log.error_message,
-            "started_at": log.started_at.isoformat() if log.started_at else None,
-            "completed_at": log.completed_at.isoformat() if log.completed_at else None,
-        }
-        for log in logs
-    ]
+    return {
+        "logs": [
+            {
+                "id": str(log.id),
+                "sync_type": log.sync_type,
+                "direction": log.direction,
+                "status": log.status,
+                "records_count": log.records_count,
+                "error_message": log.error_message,
+                "started_at": log.started_at.isoformat() if log.started_at else None,
+                "completed_at": log.completed_at.isoformat() if log.completed_at else None,
+            }
+            for log in logs
+        ]
+    }
 
 
 @router.get("/public/attendance")
