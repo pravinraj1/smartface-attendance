@@ -244,16 +244,16 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
     try {
       final XFile image = await _controller.takePicture();
       final bytes = await image.readAsBytes();
+      final b64 = base64Encode(bytes);
 
-      var req = http.MultipartRequest(
-        'POST',
+      final response = await http.post(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/recognize'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+        },
+        body: json.encode({'image_data': b64}),
       );
-      if (widget.authToken != null) req.headers['Authorization'] = 'Bearer ${widget.authToken}';
-      req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'capture.jpg'));
-
-      var res = await req.send();
-      var response = await http.Response.fromStream(res);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -612,15 +612,16 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
 
     try {
       final bytes = await _lastCapture!.readAsBytes();
-      var req = http.MultipartRequest(
-        'POST',
-        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/check-duplicate?exclude_employee_id=$_selectedEmployeeId'),
-      );
-      if (widget.authToken != null) req.headers['Authorization'] = 'Bearer ${widget.authToken}';
-      req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'check.jpg'));
+      final b64 = base64Encode(bytes);
 
-      var res = await req.send();
-      var response = await http.Response.fromStream(res);
+      final response = await http.post(
+        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/check-duplicate'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+        },
+        body: json.encode({'image': b64, 'exclude_employee_id': _selectedEmployeeId}),
+      );
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -663,15 +664,16 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
 
     try {
       final bytes = await _lastCapture!.readAsBytes();
-      var req = http.MultipartRequest(
-        'POST',
-        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/enroll?employee_id=$_selectedEmployeeId'),
-      );
-      if (widget.authToken != null) req.headers['Authorization'] = 'Bearer ${widget.authToken}';
-      req.files.add(http.MultipartFile.fromBytes('file', bytes, filename: 'face.jpg'));
+      final b64 = base64Encode(bytes);
 
-      var res = await req.send();
-      var response = await http.Response.fromStream(res);
+      final response = await http.post(
+        Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/enroll'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+        },
+        body: json.encode({'employee_id': _selectedEmployeeId, 'image_data': b64}),
+      );
 
       if (response.statusCode == 200) {
         setState(() {
