@@ -17,6 +17,7 @@ class FaceService:
         self._init_error: Optional[str] = None
         self._app = None
         self._version = EMBEDDING_VERSION
+        self._ready_event = threading.Event()
 
     def initialize(self) -> bool:
         if self._initialized:
@@ -36,6 +37,7 @@ class FaceService:
                 self._app = app
                 self._initialized = True
                 self._init_error = None
+                self._ready_event.set()
                 print(f"Face service: InsightFace {MODEL_NAME} model loaded (CPU)")
                 return True
             except Exception as e:  # noqa: BLE001
@@ -44,17 +46,23 @@ class FaceService:
                 print(f"Face service: InsightFace init failed: {e}")
                 return False
 
+    def warm_up(self) -> None:
+        """Load the model in the background so the first request never blocks the event loop."""
+        if self._ready_event.is_set():
+            return
+        threading.Thread(target=self.initialize, daemon=True, name="face-model-warmup").start()
+
     def get_embedding_version(self) -> str:
-        self.initialize()
         return self._version
 
     def is_ready(self) -> bool:
-        self.initialize()
-        return self._initialized and self._app is not None and self._init_error is None
+        return self._app is not None and self._initialized and self._init_error is None
 
     def detect_and_embed(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
         try:
-            if not self.initialize() or self._app is None:
+            if not self._ready_event.is_set():
+                self._ready_event.wait(timeout=6.0)
+            if self._app is None or not self._initialized or self._init_error is not None:
                 print(f"Face service: not ready ({self._init_error})")
                 return None, None
 
