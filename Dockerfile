@@ -28,9 +28,9 @@ RUN mkdir -p /app/data /app/storage
 
 RUN python - <<'PY' || echo "insightface model bake skipped (runtime fallback)"
 from insightface.app import FaceAnalysis
-app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection", "recognition"])
+app = FaceAnalysis(name="buffalo_s", allowed_modules=["detection", "recognition"])
 app.prepare(ctx_id=-1, det_thresh=0.5)
-print("insightface buffalo_l model baked into image")
+print("insightface buffalo_s model baked into image")
 PY
 
 EXPOSE 8000

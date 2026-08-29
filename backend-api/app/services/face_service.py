@@ -7,7 +7,7 @@ import math
 
 
 EMBEDDING_VERSION = "insightface_v1"
-MODEL_NAME = "buffalo_l"
+MODEL_NAME = "buffalo_s"
 _MODEL_LOCK = threading.Lock()
 
 
