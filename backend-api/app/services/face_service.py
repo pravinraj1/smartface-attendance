@@ -27,7 +27,10 @@ class FaceService:
             try:
                 from insightface.app import FaceAnalysis
 
-                app = FaceAnalysis(name=MODEL_NAME)
+                app = FaceAnalysis(
+                    name=MODEL_NAME,
+                    allowed_modules=["detection", "recognition"],
+                )
                 # ctx_id=-1 -> CPU execution (works on Render free tier and CI)
                 app.prepare(ctx_id=-1, det_thresh=0.5)
                 self._app = app
