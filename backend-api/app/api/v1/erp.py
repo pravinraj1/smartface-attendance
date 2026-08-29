@@ -1,34 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import Optional
+from typing import Optional, Literal
 from datetime import date, datetime
 import json
 
 
 class ERPConfigRequest(BaseModel):
-    erp_name: str = "Custom ERP"
-    erp_base_url: str = ""
-    erp_url: str = ""
-    erp_api_key: str = ""
-    api_key: str = ""
-    auth_type: str = "api_key"
-    export_format: str = "xml"
-    data_format: str = "xml"
+    erp_name: str = Field("Custom ERP", min_length=1, max_length=100)
+    erp_base_url: str = Field("", max_length=500)
+    erp_url: str = Field("", max_length=500)
+    erp_api_key: str = Field("", max_length=200)
+    api_key: str = Field("", max_length=200)
+    auth_type: Literal["api_key", "basic", "oauth2"] = "api_key"
+    export_format: Literal["xml", "json"] = "xml"
+    data_format: Literal["xml", "json"] = "xml"
     push_enabled: bool = False
-    push_endpoint: str = ""
-    push_auth_header: str = ""
+    push_endpoint: str = Field("", max_length=500)
+    push_auth_header: str = Field("", max_length=200)
     sync_enabled: bool = True
-    sync_interval_minutes: int = 15
-    endpoint_attendance: str = ""
-    endpoint_employees: str = ""
+    sync_interval_minutes: int = Field(15, ge=1, le=1440)
+    endpoint_attendance: str = Field("", max_length=500)
+    endpoint_employees: str = Field("", max_length=500)
     webhook_enabled: bool = False
-    webhook_url: str = ""
-    webhook_secret: str = ""
+    webhook_url: str = Field("", max_length=500)
+    webhook_secret: str = Field("", max_length=200)
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import (
+    get_current_user,
+    require_admin,
+    validate_outbound_url,
+)
 from app.models.user import User
 from app.models.attendance import Attendance
 from app.models.employee import Employee
@@ -36,6 +40,15 @@ from app.models.erp_config import ERPConfig, ERPsyncLog
 from app.services.erp_integration import erp_service
 
 router = APIRouter(prefix="/erp", tags=["ERP Integration"])
+
+_REDACTED = "***redacted***"
+
+
+def _redact(value):
+    """Mask a stored secret so it is never returned in plaintext via GET."""
+    if value:
+        return _REDACTED
+    return ""
 
 
 @router.get("/config")
@@ -53,21 +66,21 @@ async def get_erp_config(
         "erp_name": config.erp_name,
         "erp_url": config.erp_url,
         "erp_base_url": config.erp_url,
-        "erp_api_key": config.api_key or "",
-        "api_key": config.api_key or "",
+        "erp_api_key": _redact(config.api_key),
+        "api_key": _redact(config.api_key),
         "auth_type": config.auth_type,
         "data_format": config.data_format,
         "export_format": config.data_format,
         "sync_enabled": config.sync_enabled,
         "push_enabled": bool(config.endpoint_attendance),
         "push_endpoint": config.endpoint_attendance or "",
-        "push_auth_header": config.api_key or "",
+        "push_auth_header": _redact(config.api_key),
         "sync_interval_minutes": config.sync_interval_minutes,
         "last_sync_at": config.last_sync_at.isoformat() if config.last_sync_at else None,
         "last_sync_status": config.last_sync_status,
         "webhook_enabled": config.webhook_enabled,
         "webhook_url": config.webhook_url or "",
-        "webhook_secret": config.webhook_secret or "",
+        "webhook_secret": _redact(config.webhook_secret),
         "endpoint_attendance": config.endpoint_attendance,
         "endpoint_employees": config.endpoint_employees,
     }
@@ -77,20 +90,36 @@ async def get_erp_config(
 async def save_erp_config(
     body: ERPConfigRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     erp_url = body.erp_url or body.erp_base_url
     api_key = body.api_key or body.erp_api_key
     data_format = body.data_format or body.export_format
     endpoint_attendance = body.endpoint_attendance or body.push_endpoint
 
+    validate_outbound_url(erp_url, "ERP URL")
+    validate_outbound_url(endpoint_attendance, "Attendance push endpoint")
+    validate_outbound_url(body.endpoint_employees, "Employees endpoint")
+    validate_outbound_url(body.webhook_url, "Webhook URL")
+
     result = await db.execute(select(ERPConfig).limit(1))
     config = result.scalar_one_or_none()
+
+    def _keep_or_replace(existing_value):
+        """A redaction sentinel in an incoming secret means 'keep the stored value'."""
+        if api_key and api_key == _REDACTED:
+            return existing_value or ""
+        return api_key
+
+    def _keep_or_replace_webhook(existing_value):
+        if body.webhook_secret == _REDACTED:
+            return existing_value or ""
+        return body.webhook_secret
 
     if config:
         config.erp_name = body.erp_name
         config.erp_url = erp_url
-        config.api_key = api_key
+        config.api_key = _keep_or_replace(config.api_key)
         config.auth_type = body.auth_type
         config.data_format = data_format
         config.sync_enabled = body.sync_enabled
@@ -98,7 +127,7 @@ async def save_erp_config(
         config.endpoint_attendance = endpoint_attendance
         config.endpoint_employees = body.endpoint_employees
         config.webhook_url = body.webhook_url
-        config.webhook_secret = body.webhook_secret
+        config.webhook_secret = _keep_or_replace_webhook(config.webhook_secret)
         config.webhook_enabled = body.webhook_enabled
         config.updated_at = datetime.utcnow()
     else:
@@ -128,7 +157,7 @@ async def export_attendance_xml(
     end_date: Optional[date] = None,
     format: str = Query("xml", regex="^(xml|json)$"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     query = select(Attendance)
     if start_date:
@@ -164,7 +193,7 @@ async def export_attendance_xml(
 async def export_employees_xml(
     format: str = Query("xml", regex="^(xml|json)$"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(select(Employee))
     employees = result.scalars().all()
@@ -175,11 +204,10 @@ async def export_employees_xml(
                 "id": str(e.id),
                 "employee_code": e.employee_code,
                 "full_name": e.full_name,
-                "email": e.email,
+                "mobile_number": e.mobile_number,
                 "department_id": str(e.department_id) if e.department_id else None,
-                "designation": e.designation,
                 "employment_status": e.employment_status,
-                "date_of_joining": str(e.date_of_joining) if e.date_of_joining else None,
+                "joining_date": str(e.joining_date) if e.joining_date else None,
                 "face_enrolled": e.face_enrolled,
             }
             for e in employees
@@ -203,7 +231,7 @@ async def push_attendance_to_erp(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(select(ERPConfig).limit(1))
     config = result.scalar_one_or_none()
@@ -266,7 +294,7 @@ async def push_attendance_to_erp(
 @router.post("/webhook/test")
 async def test_webhook(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(select(ERPConfig).limit(1))
     config = result.scalar_one_or_none()
@@ -283,7 +311,7 @@ async def test_webhook(
 async def get_sync_logs(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(
         select(ERPsyncLog).order_by(ERPsyncLog.started_at.desc()).limit(limit)
@@ -308,7 +336,7 @@ async def get_sync_logs(
 
 @router.get("/public/attendance")
 async def public_attendance_export(
-    api_key: str = Query(...),
+    api_key: str = Query(..., min_length=1),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     format: str = Query("xml", regex="^(xml|json)$"),
@@ -343,7 +371,7 @@ async def public_attendance_export(
 
 @router.get("/public/employees")
 async def public_employee_export(
-    api_key: str = Query(...),
+    api_key: str = Query(..., min_length=1),
     format: str = Query("xml", regex="^(xml|json)$"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -361,9 +389,8 @@ async def public_employee_export(
                 "id": str(e.id),
                 "employee_code": e.employee_code,
                 "full_name": e.full_name,
-                "email": e.email,
+                "mobile_number": e.mobile_number,
                 "department_id": str(e.department_id) if e.department_id else None,
-                "designation": e.designation,
                 "employment_status": e.employment_status,
             }
             for e in employees

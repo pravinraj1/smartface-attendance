@@ -6,14 +6,24 @@ import {
   CardContent,
   Typography,
   Box,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Avatar,
+  Chip,
 } from '@mui/material';
 import {
   People as PeopleIcon,
   AccessTime as AccessTimeIcon,
   Warning as WarningIcon,
   CheckCircle as CheckCircleIcon,
+  Login as LoginIcon,
+  Logout as LogoutIcon,
 } from '@mui/icons-material';
 import { attendanceAPI } from '../services/api';
+
+const REFRESH_MS = 10000;
 
 interface StatCardProps {
   title: string;
@@ -60,7 +70,16 @@ export default function Dashboard() {
   const { data: stats, isLoading } = useQuery({
     queryKey: ['attendanceStats'],
     queryFn: () => attendanceAPI.getStats().then((res) => res.data),
+    refetchInterval: REFRESH_MS,
   });
+
+  const { data: liveFeed } = useQuery({
+    queryKey: ['liveAttendanceFeed'],
+    queryFn: () => attendanceAPI.getLiveFeed(15).then((res) => res.data),
+    refetchInterval: REFRESH_MS,
+  });
+
+  const events = liveFeed?.events || [];
 
   if (isLoading) {
     return <Typography>Loading...</Typography>;
@@ -118,12 +137,41 @@ export default function Dashboard() {
 
       <Card sx={{ mt: 3 }}>
         <CardContent sx={{ p: 3 }}>
-          <Typography variant="h6" sx={{ mb: 1 }}>
-            Recent Activity
-          </Typography>
-          <Typography variant="body2" sx={{ color: '#718096' }}>
-            No recent activity to display. Activity will appear here as employees check in and out.
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+            <Typography variant="h6">Live Activity</Typography>
+            <Chip label="Auto-refresh 10s" size="small" sx={{ backgroundColor: '#ebf4ff', color: '#2b6cb0', fontWeight: 600, fontSize: '0.7rem' }} />
+          </Box>
+          {events.length === 0 ? (
+            <Typography variant="body2" sx={{ color: '#718096' }}>
+              No recent activity yet. Activity will appear here as employees check in and out.
+            </Typography>
+          ) : (
+            <List disablePadding>
+              {events.map((e: any) => (
+                <ListItem key={e.id} disableGutters divider sx={{ py: 1 }}>
+                  <ListItemIcon sx={{ minWidth: 40 }}>
+                    <Avatar sx={{ width: 32, height: 32, bgcolor: e.event_type === 'CHECK_IN' ? '#2f855a' : '#c53030' }}>
+                      {e.event_type === 'CHECK_IN' ? <LoginIcon fontSize="small" /> : <LogoutIcon fontSize="small" />}
+                    </Avatar>
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{e.employee_name || 'Unknown'}</Typography>
+                        <Typography variant="caption" sx={{ color: '#a0aec0', fontFamily: 'monospace' }}>{e.employee_code}</Typography>
+                        <Chip
+                          label={e.event_type === 'CHECK_IN' ? 'CHECK-IN' : 'CHECK-OUT'}
+                          size="small"
+                          sx={{ backgroundColor: e.event_type === 'CHECK_IN' ? '#f0fff4' : '#fff5f5', color: e.event_type === 'CHECK_IN' ? '#2f855a' : '#c53030', fontWeight: 600, fontSize: '0.6rem', height: 20 }}
+                        />
+                      </Box>
+                    }
+                    secondary={e.event_time ? new Date(e.event_time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }) : ''}
+                  />
+                </ListItem>
+              ))}
+            </List>
+          )}
         </CardContent>
       </Card>
     </Box>

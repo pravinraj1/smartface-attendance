@@ -9,11 +9,13 @@ import 'dart:math';
 
 const String kApiPrefix = '/api/v1';
 const String kDefaultUrl = 'https://smartface-attendance-7ygu.onrender.com';
+const Duration kHttpTimeout = Duration(seconds: 15);
+const Duration kFaceRecognitionTimeout = Duration(seconds: 30);
+const Duration kServerCheckInterval = Duration(seconds: 30);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final cameras = await availableCameras();
-  // Use only front camera
   final frontCam = cameras.firstWhere(
     (c) => c.lensDirection == CameraLensDirection.front,
     orElse: () => cameras.first,
@@ -55,6 +57,9 @@ class _KioskHomeState extends State<KioskHome> {
   int _currentMode = 0;
   late String _serverIp;
   String? _authToken;
+  bool _serverOnline = false;
+  String _serverError = '';
+  Timer? _serverHealthTimer;
 
   String get kApiBaseUrl {
     if (kIsWeb) return Uri.base.origin;
@@ -67,6 +72,41 @@ class _KioskHomeState extends State<KioskHome> {
     super.initState();
     _serverIp = widget.serverIp;
     _login();
+    _startServerHealthCheck();
+  }
+
+  @override
+  void dispose() {
+    _serverHealthTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startServerHealthCheck() {
+    _checkServerHealth();
+    _serverHealthTimer = Timer.periodic(kServerCheckInterval, (_) {
+      _checkServerHealth();
+    });
+  }
+
+  Future<void> _checkServerHealth() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$kApiBaseUrl/health'),
+      ).timeout(kHttpTimeout);
+      final wasOffline = !_serverOnline;
+      setState(() {
+        _serverOnline = response.statusCode == 200;
+        _serverError = '';
+      });
+      if (wasOffline && _serverOnline && _authToken == null) {
+        _login();
+      }
+    } catch (e) {
+      setState(() {
+        _serverOnline = false;
+        _serverError = 'Server unavailable';
+      });
+    }
   }
 
   Future<void> _login() async {
@@ -75,13 +115,23 @@ class _KioskHomeState extends State<KioskHome> {
         Uri.parse('$kApiBaseUrl$kApiPrefix/auth/login'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'email': 'admin@smartface.com', 'password': 'Admin123!'}),
-      );
+      ).timeout(kHttpTimeout);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        _authToken = data['access_token'];
-        setState(() {});
+        setState(() {
+          _authToken = data['access_token'];
+          _serverOnline = true;
+          _serverError = '';
+        });
+      } else {
+        setState(() {
+          _serverError = 'Login failed (${response.statusCode})';
+        });
       }
     } catch (e) {
+      setState(() {
+        _serverError = 'Cannot connect to server';
+      });
       debugPrint('Login failed: $e');
     }
   }
@@ -111,8 +161,11 @@ class _KioskHomeState extends State<KioskHome> {
                 setState(() {
                   _serverIp = newIp;
                   _authToken = null;
+                  _serverOnline = false;
+                  _serverError = 'Connecting...';
                 });
                 Navigator.pop(context);
+                await _checkServerHealth();
                 _login();
               }
             },
@@ -126,21 +179,54 @@ class _KioskHomeState extends State<KioskHome> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _currentMode == 0
-          ? AttendanceMode(
-              key: ValueKey('att_$_serverIp'),
-              cameras: widget.cameras,
-              apiBaseUrl: kApiBaseUrl,
-              authToken: _authToken,
-              onSettings: _showSettings,
-            )
-          : EnrollmentMode(
-              key: ValueKey('enr_$_serverIp'),
-              cameras: widget.cameras,
-              apiBaseUrl: kApiBaseUrl,
-              authToken: _authToken,
-              onSettings: _showSettings,
+      body: Stack(
+        children: [
+          _currentMode == 0
+              ? AttendanceMode(
+                  key: ValueKey('att_$_serverIp'),
+                  cameras: widget.cameras,
+                  apiBaseUrl: kApiBaseUrl,
+                  authToken: _authToken,
+                  onSettings: _showSettings,
+                )
+              : EnrollmentMode(
+                  key: ValueKey('enr_$_serverIp'),
+                  cameras: widget.cameras,
+                  apiBaseUrl: kApiBaseUrl,
+                  authToken: _authToken,
+                  onSettings: _showSettings,
+                ),
+          // Server offline banner
+          if (!_serverOnline && _serverError.isNotEmpty)
+            Positioned(
+              top: 0, left: 0, right: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                color: Colors.red.shade800,
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_off, color: Colors.white, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _serverError,
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () async {
+                        setState(() => _serverError = 'Reconnecting...');
+                        await _checkServerHealth();
+                        if (_serverOnline) _login();
+                      },
+                      child: const Text('RETRY', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ),
             ),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentMode,
         onDestinationSelected: (i) => setState(() => _currentMode = i),
@@ -185,7 +271,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
   DateTime? _lastSuccessTime;
   int _cooldownSeconds = 5;
 
-  // Animation for scanning indicator
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
@@ -230,13 +315,18 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
   Future<void> _autoScan() async {
     if (!_controller.value.isInitialized || _isProcessing) return;
 
-    // Cooldown after success
+    if (widget.authToken == null) {
+      setState(() => _status = 'Waiting for server...');
+      return;
+    }
+
     if (_lastSuccessTime != null) {
       final elapsed = DateTime.now().difference(_lastSuccessTime!).inSeconds;
       if (elapsed < _cooldownSeconds) return;
     }
 
     setState(() {
+      _isProcessing = true;
       _scanning = true;
       _status = 'Scanning...';
     });
@@ -248,12 +338,9 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
 
       final response = await http.post(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/recognize'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
-        },
+        headers: _headers,
         body: json.encode({'image_data': b64}),
-      );
+      ).timeout(kFaceRecognitionTimeout);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -272,15 +359,11 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             _lastSuccessTime = DateTime.now();
           });
 
-          // Auto check-in
           final checkinResponse = await http.post(
             Uri.parse('${widget.apiBaseUrl}$kApiPrefix/attendance/checkin'),
-            headers: {
-              'Content-Type': 'application/json',
-              if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
-            },
+            headers: _headers,
             body: json.encode({'employee_id': employeeId, 'confidence_score': confidence}),
-          );
+          ).timeout(kHttpTimeout);
 
           if (checkinResponse.statusCode == 200) {
             final checkinData = json.decode(checkinResponse.body);
@@ -289,16 +372,12 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             final errBody = json.decode(checkinResponse.body);
             final msg = errBody['detail'] ?? '';
             if (msg.toString().toLowerCase().contains('already checked in')) {
-              // Auto check-out
               setState(() => _status = 'Checking out...');
               final checkoutResponse = await http.post(
                 Uri.parse('${widget.apiBaseUrl}$kApiPrefix/attendance/checkout'),
-                headers: {
-                  'Content-Type': 'application/json',
-                  if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
-                },
+                headers: _headers,
                 body: json.encode({'employee_id': employeeId, 'confidence_score': confidence}),
-              );
+              ).timeout(kHttpTimeout);
               if (checkoutResponse.statusCode == 200) {
                 setState(() {
                   _status = 'CHECK-OUT SUCCESS';
@@ -324,11 +403,20 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             _status = 'Face not recognized - Tap to select name';
           });
         }
+      } else if (response.statusCode == 401) {
+        setState(() => _status = 'Auth expired - check server');
+      } else {
+        setState(() => _status = 'Server error (${response.statusCode})');
       }
+    } on TimeoutException {
+      setState(() => _status = 'Server timeout - try again');
     } catch (e) {
-      setState(() => _status = 'Scanning...');
+      setState(() => _status = 'Connection error - retrying...');
     } finally {
-      setState(() => _scanning = false);
+      setState(() {
+        _isProcessing = false;
+        _scanning = false;
+      });
     }
   }
 
@@ -344,7 +432,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             return const Center(child: CircularProgressIndicator(color: Colors.white));
           },
         ),
-        // Scanning frame border
         Container(
           decoration: BoxDecoration(
             border: Border.all(
@@ -357,14 +444,10 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             ),
           ),
         ),
-        // Scanning corners
         if (_scanning)
           CustomPaint(
-            painter: ScannerCornerPainter(
-              color: Colors.blue,
-            ),
+            painter: ScannerCornerPainter(color: Colors.blue),
           ),
-        // Top info
         Positioned(
           top: 50, left: 0, right: 0,
           child: Column(children: [
@@ -378,7 +461,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             Text(DateTime.now().toString().substring(0, 16), style: const TextStyle(color: Colors.white70, fontSize: 16)),
           ]),
         ),
-        // Scanning pulse indicator
         if (_scanning)
           Positioned(
             top: 150, left: 0, right: 0,
@@ -407,7 +489,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
               ),
             ),
           ),
-        // Welcome/Goodbye card
         if (_employeeName.isNotEmpty)
           Positioned(
             bottom: 100, left: 40, right: 40,
@@ -434,7 +515,6 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
               ]),
             ),
           ),
-        // Bottom controls
         Positioned(
           bottom: 30, right: 30,
           child: Row(children: [
@@ -473,19 +553,12 @@ class ScannerCornerPainter extends CustomPainter {
     const len = 40.0;
     const inset = 20.0;
 
-    // Top-left
     canvas.drawLine(const Offset(inset, inset), const Offset(inset + len, inset), paint);
     canvas.drawLine(const Offset(inset, inset), const Offset(inset, inset + len), paint);
-
-    // Top-right
     canvas.drawLine(Offset(size.width - inset, inset), Offset(size.width - inset - len, inset), paint);
     canvas.drawLine(Offset(size.width - inset, inset), Offset(size.width - inset, inset + len), paint);
-
-    // Bottom-left
     canvas.drawLine(Offset(inset, size.height - inset), Offset(inset + len, size.height - inset), paint);
     canvas.drawLine(Offset(inset, size.height - inset), Offset(inset, size.height - inset - len), paint);
-
-    // Bottom-right
     canvas.drawLine(Offset(size.width - inset, size.height - inset), Offset(size.width - inset - len, size.height - inset), paint);
     canvas.drawLine(Offset(size.width - inset, size.height - inset), Offset(size.width - inset, size.height - inset - len), paint);
   }
@@ -555,7 +628,7 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
       final response = await http.get(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/employees?limit=500'),
         headers: _headers,
-      );
+      ).timeout(kHttpTimeout);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         setState(() {
@@ -565,13 +638,18 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
       } else {
         setState(() {
           _loadingEmployees = false;
-          _resultMessage = 'Failed to load employees';
+          _resultMessage = 'Failed to load employees (${response.statusCode})';
         });
       }
+    } on TimeoutException {
+      setState(() {
+        _loadingEmployees = false;
+        _resultMessage = 'Server timeout - check connection';
+      });
     } catch (e) {
       setState(() {
         _loadingEmployees = false;
-        _resultMessage = 'Connection error';
+        _resultMessage = 'Connection error - check server';
       });
     }
   }
@@ -590,7 +668,6 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
         _lastCapture = image;
         _isCapturing = false;
       });
-      // Auto check duplicate after capture
       if (_selectedEmployeeId != null) {
         _checkDuplicate();
       }
@@ -616,27 +693,26 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
 
       final response = await http.post(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/check-duplicate'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
-        },
+        headers: _headers,
         body: json.encode({'image': b64, 'exclude_employee_id': _selectedEmployeeId}),
-      );
+      ).timeout(kFaceRecognitionTimeout);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['duplicate'] == true) {
           setState(() {
             _isDuplicate = true;
-            _duplicateWarning = '⚠️ Face already registered to: ${data['existing_employee_name']} (${data['existing_employee_code']}) — ENROLLMENT BLOCKED';
+            _duplicateWarning = 'Face already registered to: ${data['existing_employee_name']} (${data['existing_employee_code']}) — ENROLLMENT BLOCKED';
           });
         } else {
           setState(() {
             _isDuplicate = false;
-            _duplicateWarning = '✅ Face is unique — safe to enroll';
+            _duplicateWarning = 'Face is unique — safe to enroll';
           });
         }
       }
+    } on TimeoutException {
+      setState(() => _duplicateWarning = 'Duplicate check timed out');
     } catch (e) {
       setState(() => _isDuplicate = false);
     } finally {
@@ -647,11 +723,10 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
   Future<void> _enrollFace() async {
     if (_lastCapture == null || _selectedEmployeeId == null) return;
 
-    // Block enrollment if duplicate detected
     if (_isDuplicate) {
       setState(() {
         _resultSuccess = false;
-        _resultMessage = '❌ Cannot enroll — this face is already registered to another employee';
+        _resultMessage = 'Cannot enroll — this face is already registered to another employee';
       });
       return;
     }
@@ -668,12 +743,9 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
 
       final response = await http.post(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/enroll'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
-        },
+        headers: _headers,
         body: json.encode({'employee_id': _selectedEmployeeId, 'image_data': b64}),
-      );
+      ).timeout(kFaceRecognitionTimeout);
 
       if (response.statusCode == 200) {
         setState(() {
@@ -682,7 +754,7 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
           _lastCapture = null;
           _duplicateWarning = '';
         });
-        _fetchEmployees(); // Refresh enrollment status
+        _fetchEmployees();
       } else {
         final body = json.decode(response.body);
         setState(() {
@@ -690,6 +762,11 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
           _resultMessage = body['detail'] ?? 'Enrollment failed (${response.statusCode})';
         });
       }
+    } on TimeoutException {
+      setState(() {
+        _resultSuccess = false;
+        _resultMessage = 'Enrollment timed out — try again';
+      });
     } catch (e) {
       setState(() {
         _resultSuccess = false;
@@ -808,7 +885,6 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
             ],
           ),
         ),
-        // Duplicate check warning
         if (_duplicateWarning.isNotEmpty)
           Container(
             width: double.infinity,
@@ -824,7 +900,6 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
               textAlign: TextAlign.center,
             ),
           ),
-        // Result message
         if (_resultMessage.isNotEmpty)
           Container(
             width: double.infinity,

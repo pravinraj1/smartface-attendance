@@ -1,10 +1,11 @@
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.models.user import User
 from app.models.department import Department
 from app.schemas.department import (
@@ -12,6 +13,7 @@ from app.schemas.department import (
     DepartmentUpdate,
     DepartmentResponse,
 )
+from app.services.audit import record_audit
 
 router = APIRouter(prefix="/departments", tags=["Departments"])
 
@@ -34,7 +36,7 @@ async def get_departments(
 
 @router.get("/{department_id}", response_model=DepartmentResponse)
 async def get_department(
-    department_id: str,
+    department_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -51,7 +53,7 @@ async def get_department(
 async def create_department(
     department_data: DepartmentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     existing = await db.execute(
         select(Department).where(Department.name == department_data.name)
@@ -66,15 +68,24 @@ async def create_department(
     db.add(department)
     await db.commit()
     await db.refresh(department)
+    await record_audit(
+        db,
+        user_id=current_user.id,
+        action="CREATE",
+        entity_name="department",
+        entity_id=department.id,
+        new_value={"name": department.name, "description": department.description},
+    )
+    await db.commit()
     return department
 
 
 @router.put("/{department_id}", response_model=DepartmentResponse)
 async def update_department(
-    department_id: str,
+    department_id: uuid.UUID,
     department_data: DepartmentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(
         select(Department).where(Department.id == department_id)
@@ -84,19 +95,35 @@ async def update_department(
         raise HTTPException(status_code=404, detail="Department not found")
     
     update_data = department_data.model_dump(exclude_unset=True)
+    old_values = {"name": department.name, "description": department.description, "is_active": department.is_active}
     for key, value in update_data.items():
         setattr(department, key, value)
     
     await db.commit()
     await db.refresh(department)
+    await record_audit(
+        db,
+        user_id=current_user.id,
+        action="UPDATE",
+        entity_name="department",
+        entity_id=department.id,
+        old_value=old_values,
+        new_value={
+            "name": department.name,
+            "description": department.description,
+            "is_active": department.is_active,
+            **update_data,
+        },
+    )
+    await db.commit()
     return department
 
 
 @router.delete("/{department_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_department(
-    department_id: str,
+    department_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(
         select(Department).where(Department.id == department_id)
@@ -105,5 +132,13 @@ async def delete_department(
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
     
+    await record_audit(
+        db,
+        user_id=current_user.id,
+        action="DELETE",
+        entity_name="department",
+        entity_id=department.id,
+        old_value={"name": department.name, "is_active": department.is_active},
+    )
     await db.delete(department)
     await db.commit()

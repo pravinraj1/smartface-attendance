@@ -1,74 +1,119 @@
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 import os
 import struct
-import io
 import json
+import threading
 import math
+
+
+EMBEDDING_VERSION = "insightface_v1"
+MODEL_NAME = "buffalo_l"
+_MODEL_LOCK = threading.Lock()
 
 
 class FaceService:
     def __init__(self):
         self._initialized = False
-        self._mode = "pillow"
+        self._init_error: Optional[str] = None
+        self._app = None
+        self._version = EMBEDDING_VERSION
 
-    def initialize(self):
+    def initialize(self) -> bool:
         if self._initialized:
-            return
-        os.environ.setdefault("FACE_MODE", "pillow")
-        self._mode = "pillow"
-        self._initialized = True
-        print("Face service: Pillow mode (lightweight)")
+            return True
+        with _MODEL_LOCK:
+            if self._initialized:
+                return True
+            try:
+                from insightface.app import FaceAnalysis
+
+                app = FaceAnalysis(name=MODEL_NAME)
+                # ctx_id=-1 -> CPU execution (works on Render free tier and CI)
+                app.prepare(ctx_id=-1, det_thresh=0.5)
+                self._app = app
+                self._initialized = True
+                self._init_error = None
+                print(f"Face service: InsightFace {MODEL_NAME} model loaded (CPU)")
+                return True
+            except Exception as e:  # noqa: BLE001
+                self._initialized = True
+                self._init_error = str(e)
+                print(f"Face service: InsightFace init failed: {e}")
+                return False
+
+    def get_embedding_version(self) -> str:
+        self.initialize()
+        return self._version
+
+    def is_ready(self) -> bool:
+        self.initialize()
+        return self._initialized and self._app is not None and self._init_error is None
 
     def detect_and_embed(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
-        self.initialize()
         try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(image_bytes))
-            img = img.convert("RGB")
-            w, h = img.size
-            if w < 50 or h < 50:
+            if not self.initialize() or self._app is None:
+                print(f"Face service: not ready ({self._init_error})")
                 return None, None
-            embedding = self._image_to_embedding(img)
-            quality = min(1.0, (w * h) / (300 * 300))
-            return embedding, {
-                "bbox": {"x": 0, "y": 0, "width": w, "height": h},
-                "confidence": 0.80,
+
+            import cv2
+            import numpy as np
+
+            buf = np.frombuffer(image_bytes, dtype=np.uint8)
+            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if img is None:
+                print("Face service: failed to decode image")
+                return None, None
+
+            faces = self._app.get(img)
+            if not faces:
+                print("Face service: no face detected")
+                return None, None
+
+            # Pick the highest-confidence face
+            best = max(faces, key=lambda f: float(f.det_score))
+
+            embedding = best.embedding
+            if embedding is None:
+                print("Face service: embedding missing for detected face")
+                return None, None
+
+            norm = np.linalg.norm(embedding)
+            if norm <= 0:
+                return None, None
+            unit = (embedding / norm).astype(float).tolist()
+
+            x1, y1, x2, y2 = [float(v) for v in best.bbox]
+            width = max(0.0, x2 - x1)
+            height = max(0.0, y2 - y1)
+            area = width * height
+            img_h, img_w = img.shape[:2]
+            img_area = max(1, img_h * img_w)
+            # Face too small relative to frame -> reject (helps kiosk "not sensing" issues)
+            quality = min(1.0, area / img_area)
+
+            detection_info: dict = {
+                "bbox": {"x": x1, "y": y1, "width": width, "height": height},
+                "confidence": float(best.det_score),
                 "quality": quality,
+                "embedding_version": self._version,
             }
-        except Exception as e:
+            return unit, detection_info
+
+        except Exception as e:  # noqa: BLE001
             print(f"Face detect error: {e}")
             return None, None
-
-    def _image_to_embedding(self, img) -> List[float]:
-        from PIL import Image
-        small = img.resize((16, 16), Image.LANCZOS)
-        pixels = list(small.getdata())
-        embedding = []
-        for r, g, b in pixels:
-            embedding.append(r / 255.0)
-            embedding.append(g / 255.0)
-            embedding.append(b / 255.0)
-
-        avg_r = sum(embedding[i] for i in range(0, len(embedding), 3)) / 256.0
-        avg_g = sum(embedding[i] for i in range(1, len(embedding), 3)) / 256.0
-        avg_b = sum(embedding[i] for i in range(2, len(embedding), 3)) / 256.0
-
-        for i in range(0, len(embedding), 3):
-            embedding[i] -= avg_r
-            embedding[i + 1] -= avg_g
-            embedding[i + 2] -= avg_b
-
-        norm = math.sqrt(sum(x * x for x in embedding))
-        if norm > 0:
-            embedding = [x / norm for x in embedding]
-        return embedding
 
     def compare_embeddings(
         self,
         embedding1: List[float],
         embedding2: List[float],
-        threshold: float = 0.4,
+        threshold: float = 0.3,
     ) -> Tuple[bool, float]:
+        if not embedding1 or not embedding2:
+            return False, 0.0
+        if len(embedding1) != len(embedding2):
+            # Mismatched dimension => different embedding model; never considered a match
+            return False, 0.0
         dot = sum(a * b for a, b in zip(embedding1, embedding2))
         norm1 = math.sqrt(sum(a * a for a in embedding1))
         norm2 = math.sqrt(sum(b * b for b in embedding2))
@@ -81,7 +126,7 @@ class FaceService:
         self,
         query_embedding: List[float],
         known_embeddings: List[Tuple[str, List[float]]],
-        threshold: float = 0.4,
+        threshold: float = 0.3,
     ) -> Optional[Tuple[str, float]]:
         best_id = None
         best_score = -1.0

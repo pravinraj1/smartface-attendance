@@ -1,10 +1,11 @@
-from pydantic import BaseModel
+import uuid
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
 
 class DepartmentBase(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1)
     description: Optional[str] = None
 
 
@@ -19,10 +20,9 @@ class DepartmentUpdate(BaseModel):
 
 
 class DepartmentResponse(DepartmentBase):
-    id: str
+    id: uuid.UUID
     is_active: bool
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
-    class Config:
-        from_attributes = True
+
+    model_config = {"from_attributes": True}

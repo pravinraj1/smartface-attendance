@@ -55,11 +55,10 @@ class ERPIntegrationService:
             emp_elem.set("id", str(emp.id))
             SubElement(emp_elem, "EmployeeCode").text = emp.employee_code or ""
             SubElement(emp_elem, "FullName").text = emp.full_name or ""
-            SubElement(emp_elem, "Email").text = emp.email or ""
+            SubElement(emp_elem, "MobileNumber").text = emp.mobile_number or ""
             SubElement(emp_elem, "DepartmentId").text = str(emp.department_id) if emp.department_id else ""
-            SubElement(emp_elem, "Designation").text = emp.designation or ""
             SubElement(emp_elem, "EmploymentStatus").text = emp.employment_status or ""
-            SubElement(emp_elem, "DateOfJoining").text = str(emp.date_of_joining) if emp.date_of_joining else ""
+            SubElement(emp_elem, "DateOfJoining").text = str(emp.joining_date) if emp.joining_date else ""
             SubElement(emp_elem, "FaceEnrolled").text = str(emp.face_enrolled or False)
 
         rough = tostring(root, encoding="unicode")

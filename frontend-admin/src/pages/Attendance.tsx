@@ -38,6 +38,7 @@ export default function Attendance() {
   const { data: attendanceData, isLoading } = useQuery({
     queryKey: ['attendance'],
     queryFn: () => attendanceAPI.getAll().then((res) => res.data),
+    refetchInterval: 10000,
   });
 
   const records = attendanceData?.attendance || [];

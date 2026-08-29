@@ -1,13 +1,14 @@
 import uuid
 from sqlalchemy import Column, String, Text, Boolean, TIMESTAMP, ForeignKey, Numeric, text
+from sqlalchemy.dialects.postgresql import UUID
 from app.core.database import Base
 
 
 class FaceProfile(Base):
     __tablename__ = "face_profiles"
     
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    employee_id = Column(String(36), ForeignKey("employees.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee_id = Column(UUID(as_uuid=True), ForeignKey("employees.id"), nullable=False)
     face_image_url = Column(Text, nullable=False)
     face_image_data = Column(Text)
     qdrant_vector_id = Column(String(255))

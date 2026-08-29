@@ -47,3 +47,16 @@ logs/
 # Database
 *.db
 *.sqlite3
+
+# opencode config (may contain API keys)
+opencode.json
+
+# Runtime / dev-QA artifacts (never ship)
+server.pid
+backend-api/server.pid
+backend-api/probe.py
+backend-api/probe_s7.py
+backend-api/cleanup_db.py
+backend-api/qa_live.py
+backend-api/db_check*.py
+backend-api/db_list*.py

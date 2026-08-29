@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,8 +10,9 @@ import uuid as uuid_lib
 import base64
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
 from app.core.config import settings
+from app.services.audit import record_audit
 from app.models.user import User
 from app.models.employee import Employee
 from app.models.face_profile import FaceProfile
@@ -46,14 +48,26 @@ def _decode_image(image_data: str) -> bytes:
     return base64.b64decode(b64data)
 
 
+def _to_uuid(val):
+    if val is None:
+        return None
+    if isinstance(val, uuid.UUID):
+        return val
+    try:
+        return uuid.UUID(val)
+    except (ValueError, TypeError):
+        return None
+
+
 @router.post("/enroll", response_model=FaceProfileResponse)
 async def enroll_face(
     body: FaceEnrollRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
+    emp_uuid = _to_uuid(body.employee_id)
     employee_result = await db.execute(
-        select(Employee).where(Employee.id == body.employee_id)
+        select(Employee).where(Employee.id == emp_uuid)
     )
     employee = employee_result.scalar_one_or_none()
     if not employee:
@@ -68,6 +82,12 @@ async def enroll_face(
             detail="No face detected in the image. Please upload a clear face photo.",
         )
 
+    embedding_version = (
+        detection_info.get("embedding_version")
+        if detection_info
+        else face_service.get_embedding_version()
+    )
+
     file_name = f"{uuid_lib.uuid4()}.jpg"
     relative_url = f"/api/v1/faces/image/{employee.employee_code}/{file_name}"
 
@@ -77,17 +97,17 @@ async def enroll_face(
     quality_score = detection_info.get("quality", 0.75) if detection_info else 0.75
 
     existing = await db.execute(
-        select(FaceProfile).where(FaceProfile.employee_id == body.employee_id)
+        select(FaceProfile).where(FaceProfile.employee_id == emp_uuid)
     )
     existing_faces = existing.scalars().all()
     is_primary = len(existing_faces) == 0
 
     face_profile = FaceProfile(
-        employee_id=body.employee_id,
+        employee_id=emp_uuid,
         face_image_url=relative_url,
         face_image_data=image_data_b64,
         embedding_data=embedding_json,
-        embedding_version="pillow_v1",
+        embedding_version=embedding_version,
         enrollment_quality_score=round(quality_score * 100, 2),
         is_primary=is_primary,
     )
@@ -96,13 +116,22 @@ async def enroll_face(
     employee.face_enrolled = True
     await db.commit()
     await db.refresh(face_profile)
+    await record_audit(
+        db,
+        user_id=current_user.id,
+        action="FACE_ENROLL",
+        entity_name="face_profile",
+        entity_id=face_profile.id,
+        new_value={"employee_id": str(emp_uuid), "embedding_version": embedding_version},
+    )
+    await db.commit()
 
     return face_profile
 
 
 @router.get("/employee/{employee_id}", response_model=list[FaceProfileResponse])
 async def get_employee_faces(
-    employee_id: str,
+    employee_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -117,6 +146,7 @@ async def serve_face_image(
     employee_code: str,
     filename: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(
         select(FaceProfile).where(FaceProfile.face_image_url.like(f"%/{filename}"))
@@ -136,9 +166,9 @@ async def serve_face_image(
 
 @router.delete("/{face_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_face(
-    face_id: str,
+    face_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(
         select(FaceProfile).where(FaceProfile.id == face_id)
@@ -171,9 +201,13 @@ async def delete_face(
     await db.commit()
 
 
-def _load_known_embeddings(all_faces):
+def _load_known_embeddings(all_faces, version: Optional[str] = None):
     known_embeddings = []
     for fp in all_faces:
+        if version and fp.embedding_version and fp.embedding_version != version:
+            # Skip embeddings produced by a different model/dimension (e.g. old
+            # 2304-d Pillow vs new 512-d InsightFace) to avoid meaningless matches.
+            continue
         emb = None
         if fp.embedding_data:
             emb = face_service.embedding_from_json(fp.embedding_data)
@@ -190,6 +224,7 @@ def _load_known_embeddings(all_faces):
 async def recognize_face(
     body: FaceRecognizeRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     image_bytes = _decode_image(body.image_data)
 
@@ -203,10 +238,16 @@ async def recognize_face(
             "confidence": 0,
         }
 
+    query_version = (
+        detection_info.get("embedding_version")
+        if detection_info
+        else face_service.get_embedding_version()
+    )
+
     all_faces_result = await db.execute(select(FaceProfile))
     all_faces = all_faces_result.scalars().all()
 
-    known_embeddings = _load_known_embeddings(all_faces)
+    known_embeddings = _load_known_embeddings(all_faces, version=query_version)
 
     if not known_embeddings:
         return {
@@ -217,7 +258,7 @@ async def recognize_face(
             "confidence": 0,
         }
 
-    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.4)
+    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.3)
 
     if match_result is None:
         return {
@@ -235,7 +276,7 @@ async def recognize_face(
 
     return {
         "recognized": True,
-        "employee_id": emp_id,
+        "employee_id": str(emp_id) if emp_id else None,
         "employee_name": employee.full_name if employee else "Unknown",
         "employee_code": employee.employee_code if employee else None,
         "department": None,
@@ -271,8 +312,8 @@ async def get_recognition_logs(
                 emp_code = emp.employee_code
 
         enriched.append({
-            "id": log.id,
-            "employee_id": log.employee_id,
+            "id": str(log.id),
+            "employee_id": str(log.employee_id) if log.employee_id else None,
             "employee_name": emp_name,
             "employee_code": emp_code,
             "confidence": float(log.confidence_score) if log.confidence_score else 0,
@@ -288,6 +329,7 @@ async def get_recognition_logs(
 async def check_duplicate_face(
     body: CheckDuplicateRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     image_bytes = _decode_image(body.image)
 
@@ -299,12 +341,22 @@ async def check_duplicate_face(
             "message": "No face detected",
         }
 
+    query_version = (
+        detection_info.get("embedding_version")
+        if detection_info
+        else face_service.get_embedding_version()
+    )
+
     all_faces_result = await db.execute(select(FaceProfile))
     all_faces = all_faces_result.scalars().all()
 
+    exclude_uuid = _to_uuid(body.exclude_employee_id)
+
     known_embeddings = []
     for fp in all_faces:
-        if fp.employee_id == body.exclude_employee_id:
+        if exclude_uuid and fp.employee_id == exclude_uuid:
+            continue
+        if query_version and fp.embedding_version and fp.embedding_version != query_version:
             continue
         emb = None
         if fp.embedding_data:
@@ -323,7 +375,7 @@ async def check_duplicate_face(
             "message": "No existing face profiles to compare",
         }
 
-    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.4)
+    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.85)
 
     if match_result is None:
         return {
@@ -340,7 +392,7 @@ async def check_duplicate_face(
         "is_duplicate": True,
         "duplicate": True,
         "message": f"This face is already enrolled to {employee.full_name if employee else 'Unknown'}",
-        "existing_employee_id": matched_emp_id,
+        "existing_employee_id": str(matched_emp_id) if matched_emp_id else None,
         "existing_employee_name": employee.full_name if employee else "Unknown",
         "existing_employee_code": employee.employee_code if employee else None,
         "confidence": round(confidence, 4),
@@ -351,19 +403,26 @@ async def check_duplicate_face(
 async def verify_face(
     body: FaceRecognizeRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     image_bytes = _decode_image(body.image_data)
 
-    query_embedding, _ = face_service.detect_and_embed(image_bytes)
+    query_embedding, detection_info = face_service.detect_and_embed(image_bytes)
     if query_embedding is None:
         return FaceVerifyResponse(matched=False, employee_id=None, employee_name=None, confidence=0.0)
+
+    query_version = (
+        detection_info.get("embedding_version")
+        if detection_info
+        else face_service.get_embedding_version()
+    )
 
     all_faces_result = await db.execute(select(FaceProfile))
     all_faces = all_faces_result.scalars().all()
 
-    known_embeddings = _load_known_embeddings(all_faces)
+    known_embeddings = _load_known_embeddings(all_faces, version=query_version)
 
-    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.4)
+    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.3)
 
     if match_result is None:
         return FaceVerifyResponse(matched=False, employee_id=None, employee_name=None, confidence=0.0)

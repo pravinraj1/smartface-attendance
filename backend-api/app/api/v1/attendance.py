@@ -1,11 +1,14 @@
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional
-from datetime import datetime, date
+from datetime import datetime, date, time, timedelta
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_admin
+from app.core.config import settings
+from app.core.logging_config import get_logger
 from app.models.user import User
 from app.models.attendance import Attendance
 from app.models.attendance_log import AttendanceLog
@@ -19,9 +22,60 @@ from app.schemas.attendance import (
 )
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
+logger = get_logger(__name__)
 
 
-@router.get("", response_model=list[AttendanceResponse])
+def _parse_time(value: str) -> Optional[time]:
+    try:
+        return time.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _compute_late_minutes(check_in_dt: datetime, today: date) -> int:
+    late_after = _parse_time(settings.LATE_AFTER_TIME)
+    if not late_after:
+        return 0
+    threshold = datetime.combine(today, late_after)
+    if check_in_dt > threshold:
+        return int((check_in_dt - threshold).total_seconds() // 60)
+    return 0
+
+
+def _serialize_attendance(rec: Attendance) -> dict:
+    total_hours = None
+    if rec.total_work_minutes and rec.total_work_minutes > 0:
+        total_hours = round(rec.total_work_minutes / 60, 2)
+    return {
+        "id": str(rec.id),
+        "employee_id": str(rec.employee_id),
+        "date": str(rec.attendance_date),
+        "check_in": rec.check_in.isoformat() if rec.check_in else None,
+        "check_out": rec.check_out.isoformat() if rec.check_out else None,
+        "total_hours": total_hours,
+        "status": rec.attendance_status or "",
+        "late_minutes": rec.late_minutes or 0,
+        "remarks": rec.remarks,
+    }
+
+
+async def _enrich_attendance(db: AsyncSession, records: list[Attendance]) -> dict:
+    emp_ids = {r.employee_id for r in records if r.employee_id}
+    employees: dict = {}
+    if emp_ids:
+        res = await db.execute(select(Employee).where(Employee.id.in_(emp_ids)))
+        employees = {e.id: e for e in res.scalars().all()}
+    rows = []
+    for rec in records:
+        row = _serialize_attendance(rec)
+        emp = employees.get(rec.employee_id)
+        row["employee_name"] = emp.full_name if emp else None
+        row["employee_code"] = emp.employee_code if emp else None
+        rows.append(row)
+    return {"attendance": rows, "total": len(rows)}
+
+
+@router.get("")
 async def get_attendance(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -32,26 +86,30 @@ async def get_attendance(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = select(Attendance)
-    
+    query = select(Attendance).order_by(Attendance.attendance_date.desc())
+
     if employee_id:
-        query = query.where(Attendance.employee_id == employee_id)
+        try:
+            emp_uuid = uuid.UUID(employee_id)
+            query = query.where(Attendance.employee_id == emp_uuid)
+        except ValueError:
+            pass
     if start_date:
         query = query.where(Attendance.attendance_date >= start_date)
     if end_date:
         query = query.where(Attendance.attendance_date <= end_date)
     if status:
         query = query.where(Attendance.attendance_status == status)
-    
-    query = query.order_by(Attendance.attendance_date.desc())
+
     query = query.offset(skip).limit(limit)
     result = await db.execute(query)
-    return result.scalars().all()
+    records = result.scalars().all()
+    return await _enrich_attendance(db, records)
 
 
 @router.get("/employee/{employee_id}", response_model=list[AttendanceResponse])
 async def get_employee_attendance(
-    employee_id: str,
+    employee_id: uuid.UUID,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     db: AsyncSession = Depends(get_db),
@@ -121,9 +179,12 @@ async def get_attendance_stats(
 async def check_in(
     request: CheckInRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    emp_id = uuid.UUID(request.employee_id) if isinstance(request.employee_id, str) else request.employee_id
+    
     employee_result = await db.execute(
-        select(Employee).where(Employee.id == request.employee_id)
+        select(Employee).where(Employee.id == emp_id)
     )
     employee = employee_result.scalar_one_or_none()
     if not employee:
@@ -137,7 +198,7 @@ async def check_in(
     
     existing_attendance = await db.execute(
         select(Attendance).where(
-            Attendance.employee_id == request.employee_id,
+            Attendance.employee_id == emp_id,
             Attendance.attendance_date == today,
         )
     )
@@ -148,21 +209,26 @@ async def check_in(
     
     if attendance and attendance.check_in:
         raise HTTPException(status_code=400, detail="Already checked in today")
-    
+
+    late_mins = _compute_late_minutes(now, today)
+    new_status = "LATE" if late_mins > 0 else "PRESENT"
+
     if not attendance:
         attendance = Attendance(
-            employee_id=request.employee_id,
+            employee_id=emp_id,
             attendance_date=today,
             check_in=now,
-            attendance_status="PRESENT",
+            attendance_status=new_status,
+            late_minutes=late_mins,
         )
         db.add(attendance)
     else:
         attendance.check_in = now
-        attendance.attendance_status = "PRESENT"
+        attendance.attendance_status = new_status
+        attendance.late_minutes = late_mins
     
     log = AttendanceLog(
-        employee_id=request.employee_id,
+        employee_id=emp_id,
         event_type="CHECK_IN",
         event_time=now,
         confidence_score=request.confidence_score,
@@ -187,9 +253,12 @@ async def check_in(
 async def check_out(
     request: CheckOutRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    emp_id = uuid.UUID(request.employee_id) if isinstance(request.employee_id, str) else request.employee_id
+    
     employee_result = await db.execute(
-        select(Employee).where(Employee.id == request.employee_id)
+        select(Employee).where(Employee.id == emp_id)
     )
     employee = employee_result.scalar_one_or_none()
     if not employee:
@@ -200,7 +269,7 @@ async def check_out(
     
     existing_attendance = await db.execute(
         select(Attendance).where(
-            Attendance.employee_id == request.employee_id,
+            Attendance.employee_id == emp_id,
             Attendance.attendance_date == today,
         )
     )
@@ -219,7 +288,7 @@ async def check_out(
         attendance.total_work_minutes = int(work_duration.total_seconds() / 60)
     
     log = AttendanceLog(
-        employee_id=request.employee_id,
+        employee_id=emp_id,
         event_type="CHECK_OUT",
         event_time=now,
         confidence_score=request.confidence_score,
@@ -254,7 +323,11 @@ async def get_attendance_logs(
     query = select(AttendanceLog)
     
     if employee_id:
-        query = query.where(AttendanceLog.employee_id == employee_id)
+        try:
+            emp_uuid = uuid.UUID(employee_id)
+            query = query.where(AttendanceLog.employee_id == emp_uuid)
+        except ValueError:
+            pass
     if event_type:
         query = query.where(AttendanceLog.event_type == event_type)
     if start_date:
@@ -266,3 +339,39 @@ async def get_attendance_logs(
     query = query.offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
+
+
+@router.get("/logs/live")
+async def get_live_attendance_feed(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Real-time attendance activity feed (most recent check-in/check-out events)."""
+    result = await db.execute(
+        select(AttendanceLog)
+        .order_by(AttendanceLog.event_time.desc())
+        .limit(limit)
+    )
+    logs = result.scalars().all()
+
+    emp_ids = {log.employee_id for log in logs if log.employee_id}
+    employees: dict = {}
+    if emp_ids:
+        res = await db.execute(select(Employee).where(Employee.id.in_(emp_ids)))
+        employees = {e.id: e for e in res.scalars().all()}
+
+    events = []
+    for log in logs:
+        emp = employees.get(log.employee_id)
+        events.append({
+            "id": str(log.id),
+            "employee_id": str(log.employee_id) if log.employee_id else None,
+            "employee_name": emp.full_name if emp else None,
+            "employee_code": emp.employee_code if emp else None,
+            "event_type": log.event_type,
+            "event_time": log.event_time.isoformat() if log.event_time else None,
+            "confidence": float(log.confidence_score) if log.confidence_score is not None else None,
+        })
+
+    return {"events": events, "count": len(events)}

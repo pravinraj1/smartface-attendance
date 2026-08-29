@@ -1,3 +1,4 @@
+import uuid
 from pydantic import BaseModel
 from typing import Optional
 
@@ -12,7 +13,6 @@ class RoleCreate(RoleBase):
 
 
 class RoleResponse(RoleBase):
-    id: str
-    
-    class Config:
-        from_attributes = True
+    id: uuid.UUID
+
+    model_config = {"from_attributes": True}

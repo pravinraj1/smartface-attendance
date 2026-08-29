@@ -10,7 +10,9 @@ import {
   Button,
   Chip,
 } from '@mui/material';
-import { Assessment as AssessmentIcon, People as PeopleIcon, AccessTime as AccessTimeIcon } from '@mui/icons-material';
+import {
+  Assessment as AssessmentIcon, People as PeopleIcon, AccessTime as AccessTimeIcon, Download as DownloadIcon,
+} from '@mui/icons-material';
 import { reportsAPI } from '../services/api';
 
 export default function Reports() {
@@ -18,7 +20,7 @@ export default function Reports() {
   const [endDate, setEndDate] = useState('');
   const [departmentId, setDepartmentId] = useState('');
 
-  const { data: summary, isLoading: loadingSummary } = useQuery({
+  const { data: summary, isLoading: loadingSummary, refetch } = useQuery({
     queryKey: ['reportSummary', startDate, endDate, departmentId],
     queryFn: () => reportsAPI.getSummary({
       start_date: startDate || undefined,
@@ -26,6 +28,27 @@ export default function Reports() {
       department_id: departmentId || undefined,
     }).then((res) => res.data),
   });
+
+  const handleExport = async () => {
+    try {
+      const res = await reportsAPI.exportSummary({
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+        department_id: departmentId || undefined,
+      });
+      const blob = new Blob([res.data], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `attendance_summary_${startDate || 'all'}_${endDate || 'all'}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Export failed. Please try again.');
+    }
+  };
 
   return (
     <Box>
@@ -40,7 +63,7 @@ export default function Reports() {
       <Card sx={{ mb: 2.5 }}>
         <CardContent sx={{ py: 2.5 }}>
           <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={3}>
+            <Grid item xs={12} md={2}>
               <TextField
                 size="small"
                 type="date"
@@ -51,7 +74,7 @@ export default function Reports() {
                 InputLabelProps={{ shrink: true }}
               />
             </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid item xs={12} md={2}>
               <TextField
                 size="small"
                 type="date"
@@ -62,7 +85,7 @@ export default function Reports() {
                 InputLabelProps={{ shrink: true }}
               />
             </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid item xs={12} md={2}>
               <TextField
                 size="small"
                 label="Department ID"
@@ -72,8 +95,19 @@ export default function Reports() {
               />
             </Grid>
             <Grid item xs={12} md={3}>
-              <Button variant="contained" fullWidth sx={{ py: 1.05 }}>
+              <Button variant="contained" fullWidth sx={{ py: 1.05 }} onClick={() => refetch()}>
                 Generate Report
+              </Button>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Button
+                variant="outlined"
+                fullWidth
+                sx={{ py: 1.05 }}
+                startIcon={<DownloadIcon />}
+                onClick={handleExport}
+              >
+                Export CSV
               </Button>
             </Grid>
           </Grid>

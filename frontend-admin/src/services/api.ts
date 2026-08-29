@@ -72,6 +72,8 @@ export const attendanceAPI = {
     api.post('/attendance/checkout', data),
   getLogs: (params?: { skip?: number; limit?: number; employee_id?: string; event_type?: string }) =>
     api.get('/attendance/logs', { params }),
+  getLiveFeed: (limit: number = 20) =>
+    api.get('/attendance/logs/live', { params: { limit } }),
 };
 
 export const faceAPI = {
@@ -95,6 +97,8 @@ export const reportsAPI = {
     api.get(`/reports/employee/${employeeId}`, { params }),
   getDepartmentReport: (departmentId: string, params?: { start_date?: string; end_date?: string }) =>
     api.get(`/reports/department/${departmentId}`, { params }),
+  exportSummary: (params?: { start_date?: string; end_date?: string; department_id?: string }) =>
+    api.get('/reports/summary', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
 };
 
 export const erpAPI = {

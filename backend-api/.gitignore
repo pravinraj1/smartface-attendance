@@ -1,0 +1,38 @@
+# Backend API
+.env
+.env.local
+env/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Database
+*.db
+*.sqlite3
+
+# Storage
+storage/*
+!storage/.gitkeep
+
+# Test files (keep tracked but ignore generated ones)
+test_*.pyc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# opencode config (may contain API keys)
+opencode.json

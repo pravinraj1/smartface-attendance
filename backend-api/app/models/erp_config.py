@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer
+from sqlalchemy import Column, String, Boolean, DateTime, Text, Integer, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.database import Base
 
@@ -32,7 +32,7 @@ class ERPsyncLog(Base):
     __tablename__ = "erp_sync_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    erp_config_id = Column(UUID(as_uuid=True), nullable=False)
+    erp_config_id = Column(UUID(as_uuid=True), ForeignKey("erp_configs.id"), nullable=False)
     sync_type = Column(String(50), nullable=False)
     direction = Column(String(20), nullable=False, default="push")
     status = Column(String(50), nullable=False, default="pending")
