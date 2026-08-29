@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_LOGIN: int = 10
     RATE_LIMIT_WINDOW: int = 60
     MAX_REQUEST_BODY_BYTES: int = 3 * 1024 * 1024
+    DOCS_ENABLED: bool = True
 
     FACE_MATCH_THRESHOLD: float = 0.75
     ATTENDANCE_COOLDOWN_MINUTES: int = 5

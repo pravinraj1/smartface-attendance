@@ -13,4 +13,6 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: CORS_ORIGINS
-        value: '["*"]'
+        value: '["https://smartface-attendance-7ygu.onrender.com","http://localhost:5173","http://localhost:3000","http://127.0.0.1:5173","http://127.0.0.1:3000"]'
+      - key: DOCS_ENABLED
+        value: "false"

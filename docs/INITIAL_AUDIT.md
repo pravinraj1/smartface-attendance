@@ -189,7 +189,7 @@ Prior `OSError: [Errno 101] Network is unreachable` during Render deploy and the
 - [x] Deployment files (Dockerfile(s), render.yaml, docker-compose, .env.example) reviewed.
 - [x] Frontend API contract (`api.ts`) & kiosk flow confirmed.
 - [x] `/docs/INITIAL_AUDIT.md` authored (this file).
-- [ ] `/docs/ARCHITECTURE.md` (target of Phase 2).
-- [ ] `/docs/PRODUCTION_READINESS.md` (target of Phase 10).
+- [x] `/docs/ARCHITECTURE.md` (target of Phase 2).
+- [x] `/docs/PRODUCTION_READINESS.md` (target of Phase 10).
 
 > **Next action:** begin Phase 2 — Foundation (RBAC on mutations, logging, validation). Existing uncommitted security fixes serve as the Phase 2 seed.

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -58,6 +58,9 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     lifespan=lifespan,
+    docs_url="/docs" if settings.DOCS_ENABLED else None,
+    redoc_url="/redoc" if settings.DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if settings.DOCS_ENABLED else None,
 )
 
 app.add_middleware(
@@ -111,6 +114,9 @@ class LoginRateLimitMiddleware:
             now = time.time()
             window = settings.RATE_LIMIT_WINDOW
             limit = settings.RATE_LIMIT_LOGIN
+            if len(_login_attempts) > 10000:
+                for stale_ip in [k for k, v in _login_attempts.items() if not v or now - v[-1] >= window]:
+                    _login_attempts.pop(stale_ip, None)
             entry = [t for t in _login_attempts.get(ip, []) if now - t < window]
             _login_attempts[ip] = entry
             if len(entry) >= limit:
@@ -131,6 +137,29 @@ class LoginRateLimitMiddleware:
         await self.app(scope, receive, send)
 
 app.add_middleware(LoginRateLimitMiddleware)
+
+# --- Security headers ---
+class SecurityHeadersMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def add_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"x-content-type-options", b"nosniff"))
+                headers.append((b"x-frame-options", b"SAMEORIGIN"))
+                headers.append((b"referrer-policy", b"no-referrer"))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, add_headers)
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Structured request logging ---
 import asyncio as _asyncio
@@ -185,6 +214,7 @@ async def health_check():
 
 
 admin_dist = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "admin-dist"))
+admin_dist_real = os.path.realpath(admin_dist)
 
 if os.path.isdir(admin_dist):
     admin_assets = os.path.join(admin_dist, "assets")
@@ -196,8 +226,11 @@ if os.path.isdir(admin_dist):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         if full_path.startswith(SPA_PREFIXES):
-            return
+            raise HTTPException(status_code=404, detail="Not found")
         file_path = os.path.join(admin_dist, full_path)
         if full_path and os.path.isfile(file_path):
-            return FileResponse(file_path)
+            real = os.path.realpath(file_path)
+            if real.startswith(admin_dist_real + os.sep):
+                return FileResponse(file_path)
+            raise HTTPException(status_code=404, detail="Not found")
         return FileResponse(os.path.join(admin_dist, "index.html"))
