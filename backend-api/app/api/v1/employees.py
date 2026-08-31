@@ -15,8 +15,83 @@ from app.schemas.employee import (
     EmployeeListResponse,
 )
 from app.services.audit import record_audit
+from pydantic import BaseModel, conlist
 
 router = APIRouter(prefix="/employees", tags=["Employees"])
+
+
+class BulkImportRequest(BaseModel):
+    employees: conlist(EmployeeCreate, min_length=1, max_length=500)
+
+
+@router.post("/bulk", summary="Bulk import employees")
+async def bulk_create_employees(
+    body: BulkImportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Batch-create up to 500 employees at once. Skips any that collide on
+    employee_code or mobile_number; returns per-row results and a summary."""
+    created = []
+    skipped = []
+    errors = []
+
+    codes = [e.employee_code for e in body.employees]
+    existing_codes = set()
+    for chunk in range(0, len(codes), 100):
+        res = await db.execute(
+            select(Employee.employee_code).where(Employee.employee_code.in_(codes[chunk:chunk + 100]))
+        )
+        existing_codes.update(res.scalars().all())
+
+    mobiles = [e.mobile_number for e in body.employees if e.mobile_number]
+    existing_mobiles = set()
+    for chunk in range(0, len(mobiles), 100):
+        res = await db.execute(
+            select(Employee.mobile_number).where(Employee.mobile_number.in_(mobiles[chunk:chunk + 100]))
+        )
+        existing_mobiles.update(res.scalars().all())
+
+    seen_codes = set()
+    seen_mobiles = set()
+    for emp_data in body.employees:
+        try:
+            if emp_data.employee_code in existing_codes or emp_data.employee_code in seen_codes:
+                skipped.append({"employee_code": emp_data.employee_code, "reason": "employee_code already exists"})
+                continue
+            if emp_data.mobile_number:
+                if emp_data.mobile_number in existing_mobiles or emp_data.mobile_number in seen_mobiles:
+                    skipped.append({"employee_code": emp_data.employee_code, "reason": "mobile_number already registered"})
+                    continue
+            employee = Employee(**emp_data.model_dump())
+            db.add(employee)
+            seen_codes.add(emp_data.employee_code)
+            if emp_data.mobile_number:
+                seen_mobiles.add(emp_data.mobile_number)
+            created.append(employee.employee_code)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"employee_code": getattr(emp_data, "employee_code", "?"), "error": str(exc)})
+
+        if (len(created) + len(skipped) + len(errors)) % 200 == 0:
+            await db.flush()
+
+    await db.commit()
+
+    await record_audit(
+        db,
+        user_id=current_user.id,
+        action="BULK_CREATE",
+        entity_name="employee",
+        new_value={"created": len(created), "skipped": len(skipped), "errors": len(errors)},
+    )
+    await db.commit()
+
+    return {
+        "imported": len(created),
+        "skipped": skipped,
+        "errors": errors,
+        "total_received": len(body.employees),
+    }
 
 
 @router.get("", response_model=EmployeeListResponse)

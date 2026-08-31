@@ -178,3 +178,39 @@ def test_rbac_viewer_denied_bulk_export(client, admin_headers, db_call):
             await db.delete(u)
             await db.commit()
     db_call(_cleanup)
+
+def test_bulk_employee_import(client, admin_headers, department, db_call):
+    """Bulk create employees, verify skip on duplicate code, cleanup."""
+    assert department is not None
+    did = department["id"]
+    codes = [f"BULK{uuid.uuid4().hex[:6]}" for _ in range(3)]
+    payload = {
+        "employees": [
+            {"employee_code": codes[0], "full_name": "Bulk One", "department_id": did, "employment_status": "ACTIVE"},
+            {"employee_code": codes[1], "full_name": "Bulk Two", "department_id": did, "employment_status": "ACTIVE"},
+            {"employee_code": codes[2], "full_name": "Bulk Three", "department_id": did, "employment_status": "ACTIVE"},
+            {"employee_code": codes[0], "full_name": "Duplicate", "employment_status": "ACTIVE"},
+        ]
+    }
+    r = client.post("/api/v1/employees/bulk", json=payload, headers=admin_headers)
+    assert r.status_code == 200, f"bulk failed: {r.text}"
+    body = r.json()
+    assert body["imported"] == 3
+    assert body["total_received"] == 4
+    assert len(body["skipped"]) == 1
+
+    found = 0
+    for c in codes:
+        resp = client.get(f"/api/v1/employees?search={c}", headers=admin_headers)
+        found += resp.json()["total"]
+    assert found >= 3
+
+    async def _cleanup(db):
+        from sqlalchemy import select
+        from app.models.employee import Employee
+        for c in codes:
+            e = (await db.execute(select(Employee).where(Employee.employee_code == c))).scalar_one_or_none()
+            if e:
+                await db.delete(e)
+        await db.commit()
+    db_call(_cleanup)

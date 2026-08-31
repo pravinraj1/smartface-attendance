@@ -8,11 +8,9 @@ RUN npm ci
 COPY frontend-admin/ .
 RUN npm run build
 
-FROM --platform=linux/amd64 python:3.12
+FROM --platform=linux/amd64 python:3.12-slim
 
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 
 COPY backend-api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -25,13 +23,6 @@ COPY backend-api/ .
 COPY --from=admin-build /app/dist /app/admin-dist
 
 RUN mkdir -p /app/data /app/storage
-
-RUN python - <<'PY' || echo "insightface model bake skipped (runtime fallback)"
-from insightface.app import FaceAnalysis
-app = FaceAnalysis(name="buffalo_s", allowed_modules=["detection", "recognition"])
-app.prepare(ctx_id=-1, det_thresh=0.5)
-print("insightface buffalo_s model baked into image")
-PY
 
 EXPOSE 8000
 

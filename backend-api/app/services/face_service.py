@@ -1,73 +1,122 @@
 from typing import Optional, Tuple, List
+import io
 import os
 import struct
 import json
 import base64
 import math
 
-import httpx
+import numpy as np
+
+from PIL import Image
 
 from app.core.config import settings
 
+try:
+    import cv2
+    _HAS_CV2 = True
+except Exception:  # pragma: no cover
+    cv2 = None
+    _HAS_CV2 = False
 
-EMBEDDING_VERSION = "insightface_v1"
+EMBEDDING_VERSION = "lbph_v1"
 
 
 class FaceService:
-    """Face detection/embedding delegated to a lightweight sidecar inference
-    service (see face-service/). Keeps heavy ML deps (opencv/onnxruntime/
-    insightface) out of the main API process, which previously OOM-killed the
-    512 MB Render free instance when loading the model in-process.
+    """Face detection + embedding done fully in-process using lightweight
+    OpenCV (headless). Uses CascadeClassifier for detection and LBPH
+    histograms for recognition -- no neural-network runtime (onnxruntime/
+    insightface) required, so it fits well within the 512 MB Render free
+    instance.
+
+    Public API is unchanged from the previous sidecar-delegating
+    implementation so the surrounding code (faces.py etc.) is agnostic to
+    how detection/embedding is produced.
     """
 
     def __init__(self):
         self._version = EMBEDDING_VERSION
-        self._service_url = (settings.FACE_SERVICE_URL or "").rstrip("/")
+        self._cascade_path = (
+            os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+            if _HAS_CV2
+            else None
+        )
+        self._cascade = None
+        self._profile_cascade = None
 
-    def _detect_endpoint(self) -> Optional[str]:
-        return f"{self._service_url}/detect" if self._service_url else None
-
-    def initialize(self) -> bool:
+    def _lazy_init(self) -> bool:
+        if not _HAS_CV2:
+            return False
+        if self._cascade is None:
+            self._cascade = cv2.CascadeClassifier(self._cascade_path)
         return True
 
+    def initialize(self) -> bool:
+        return _HAS_CV2
+
     def warm_up(self) -> None:
-        pass
+        self._lazy_init()
 
     def get_embedding_version(self) -> str:
         return self._version
 
     def is_ready(self) -> bool:
-        if not self._service_url:
-            return False
-        return True
+        return _HAS_CV2
+
+    def _decode_to_gray(self, image_bytes: bytes) -> Optional[np.ndarray]:
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            img = img.convert("RGB")
+            arr = np.asarray(img)
+        except Exception:
+            try:
+                arr = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+            except Exception:
+                return None
+        if arr is None:
+            return None
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        return gray
 
     def detect_and_embed(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
-        endpoint = self._detect_endpoint()
-        if not endpoint:
-            print("Face service: FACE_SERVICE_URL not configured")
+        if not self._lazy_init():
+            print("Face service: OpenCV unavailable")
             return None, None
 
-        payload = {
-            "image_data": base64.b64encode(image_bytes).decode("ascii"),
-        }
-        try:
-            resp = httpx.post(endpoint, json=payload, timeout=60.0)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Face service: sidecar unreachable: {exc}")
+        gray = self._decode_to_gray(image_bytes)
+        if gray is None:
+            print("Face service: could not decode image")
             return None, None
 
-        if resp.status_code != 200:
-            print(f"Face service: sidecar returned HTTP {resp.status_code}")
-            return None, None
-
-        data = resp.json()
-        embedding = data.get("embedding")
-        detection_info = data.get("detection_info")
-        if not embedding:
+        # Equalize to make LBPH detection more robust to lighting.
+        gray_eq = cv2.equalizeHist(gray)
+        faces = self._cascade.detectMultiScale(
+            gray_eq, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80)
+        )
+        if len(faces) == 0:
             print("Face service: no face detected")
             return None, None
 
-        return [float(v) for v in embedding], detection_info
+        # Use the largest detected face.
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+        face_region = gray[y : y + h, x : x + w]
+        face_region = cv2.resize(face_region, (128, 128), interpolation=cv2.INTER_AREA)
+        face_region = cv2.equalizeHist(face_region)
+
+        recognizer = cv2.face.LBPHFaceRecognizer_create(
+            radius=1, neighbors=8, grid_x=8, grid_y=8
+        )
+        recognizer.train(np.array([face_region]), np.array([1], dtype=np.int32))
+        hist = recognizer.getHistograms()[0]
+        embedding = hist.flatten().astype(np.float64).tolist()
+
+        detection_info = {
+            "embedding_version": self._version,
+            "quality": 0.9,
+            "confidence": 1.0,
+            "bbox": {"x": int(x), "y": int(y), "w": int(w), "h": int(h)},
+        }
+        return embedding, detection_info
 
     def compare_embeddings(
         self,
@@ -79,12 +128,13 @@ class FaceService:
             return False, 0.0
         if len(embedding1) != len(embedding2):
             return False, 0.0
-        dot = sum(a * b for a, b in zip(embedding1, embedding2))
-        norm1 = math.sqrt(sum(a * a for a in embedding1))
-        norm2 = math.sqrt(sum(b * b for b in embedding2))
-        if norm1 == 0 or norm2 == 0:
+        a = np.asarray(embedding1, dtype=np.float64)
+        b = np.asarray(embedding2, dtype=np.float64)
+        na = np.linalg.norm(a)
+        nb = np.linalg.norm(b)
+        if na == 0 or nb == 0:
             return False, 0.0
-        similarity = dot / (norm1 * norm2)
+        similarity = float(np.dot(a, b) / (na * nb))
         return similarity >= threshold, similarity
 
     def find_best_match(
