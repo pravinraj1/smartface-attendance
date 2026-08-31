@@ -50,10 +50,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Startup seed warning: {e}", extra={"event": "admin_seed"})
 
-    from app.services.face_service import face_service
-    face_service.warm_up()
-    logger.info("Face model warmup started", extra={"event": "face_warmup"})
-
     yield
     await engine.dispose()
 
