@@ -58,6 +58,21 @@ def test_reports_json(client, admin_headers, employee):
     assert summ.status_code == 200
 
 
+def test_reports_department_breakdown_scoped(client, admin_headers, employee, department):
+    """Department breakdown should only count that department's own attendance."""
+    summ = client.get("/api/v1/reports/summary", headers=admin_headers)
+    assert summ.status_code == 200
+    body = summ.json()
+    dept_summary = body["department_summary"]
+    entry = next((d for d in dept_summary if d["department_id"] == employee["department_id"]), None)
+    assert entry is not None, "department entry missing from summary"
+    assert entry["total_employees"] >= 1
+    # The sum of per-department present_days must never exceed the total present
+    # count — proving attendance isn't double-counted/leaked across departments.
+    per_dept_present = sum(d["present_days"] for d in dept_summary)
+    assert per_dept_present <= body["present_days"]
+
+
 def test_reports_csv(client, admin_headers, employee):
     assert employee is not None
     eid = employee["id"]

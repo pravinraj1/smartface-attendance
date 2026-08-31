@@ -82,11 +82,47 @@ async def enroll_face(
             detail="No face detected in the image. Please upload a clear face photo.",
         )
 
-    embedding_version = (
+    query_version = (
         detection_info.get("embedding_version")
         if detection_info
         else face_service.get_embedding_version()
     )
+
+    # ── Duplicate-face guard ──────────────────────────────────────────────
+    # Reject enrollment if this face already belongs to a different employee.
+    all_faces_result = await db.execute(select(FaceProfile))
+    all_faces = all_faces_result.scalars().all()
+    dup_threshold = settings.FACE_DUPLICATE_THRESHOLD
+
+    dup_embeddings = []
+    for fp in all_faces:
+        if fp.employee_id == emp_uuid:
+            continue
+        if fp.embedding_version and fp.embedding_version != query_version:
+            continue
+        emb = face_service.embedding_from_json(fp.embedding_data) if fp.embedding_data else None
+        if emb is None:
+            continue
+        dup_embeddings.append((str(fp.employee_id), emb))
+
+    if dup_embeddings:
+        dup_match = face_service.find_best_match(embedding, dup_embeddings, threshold=dup_threshold)
+        if dup_match is not None:
+            dup_emp_id_str, dup_confidence = dup_match
+            dup_emp_result = await db.execute(
+                select(Employee).where(Employee.id == uuid.UUID(dup_emp_id_str))
+            )
+            dup_emp = dup_emp_result.scalar_one_or_none()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"This face is already enrolled to another employee "
+                    f"({dup_emp.full_name if dup_emp else 'Unknown'}, "
+                    f"code {dup_emp.employee_code if dup_emp else '?'}). "
+                    f"Confidence: {round(dup_confidence, 4)}. "
+                    f"Cannot enroll the same face to multiple employees."
+                ),
+            )
 
     file_name = f"{uuid_lib.uuid4()}.jpg"
     relative_url = f"/api/v1/faces/image/{employee.employee_code}/{file_name}"
@@ -107,7 +143,7 @@ async def enroll_face(
         face_image_url=relative_url,
         face_image_data=image_data_b64,
         embedding_data=embedding_json,
-        embedding_version=embedding_version,
+        embedding_version=query_version,
         enrollment_quality_score=round(quality_score * 100, 2),
         is_primary=is_primary,
     )
@@ -122,7 +158,7 @@ async def enroll_face(
         action="FACE_ENROLL",
         entity_name="face_profile",
         entity_id=face_profile.id,
-        new_value={"employee_id": str(emp_uuid), "embedding_version": embedding_version},
+        new_value={"employee_id": str(emp_uuid), "embedding_version": query_version},
     )
     await db.commit()
 
@@ -375,7 +411,7 @@ async def check_duplicate_face(
             "message": "No existing face profiles to compare",
         }
 
-    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=0.85)
+    match_result = face_service.find_best_match(query_embedding, known_embeddings, threshold=settings.FACE_DUPLICATE_THRESHOLD)
 
     if match_result is None:
         return {

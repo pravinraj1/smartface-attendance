@@ -98,9 +98,7 @@ async def report_summary(
         dept_emp_ids = list(dept_emp_ids_res.scalars().all())
         if not dept_emp_ids:
             continue
-        d_query = select(Attendance)
-        if emp_ids is not None and department_id is not None:
-            d_query = d_query.where(Attendance.employee_id.in_(dept_emp_ids))
+        d_query = select(Attendance).where(Attendance.employee_id.in_(dept_emp_ids))
         d_query = _date_filter(d_query, start_date, end_date)
         d_records = (await db.execute(d_query)).scalars().all()
         d_present = sum(1 for r in d_records if r.check_in is not None)
