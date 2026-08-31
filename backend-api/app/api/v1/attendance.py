@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional
 from datetime import datetime, date, time, timedelta
+from zoneinfo import ZoneInfo
 
 from app.core.database import get_db
 from app.core.security import get_current_user, require_admin
@@ -23,6 +24,25 @@ from app.schemas.attendance import (
 
 router = APIRouter(prefix="/attendance", tags=["Attendance"])
 logger = get_logger(__name__)
+
+# Attendance is recorded in real local time (IST, Asia/Kolkata). The DB
+# stores naive TIMESTAMP columns (no tz), so we persist the IST wall-clock
+# value (local time as seen by the office) so check-in/out, dates, late
+# calculation and stats all line up on the real local clock.
+try:
+    _TZ = ZoneInfo("Asia/Kolkata")
+except Exception:  # pragma: no cover - fall back to a fixed +5:30 offset
+    from datetime import timezone, timedelta as _td
+    _TZ = timezone(_td(hours=5, minutes=30))
+
+
+def _now_ist() -> datetime:
+    """Current IST wall-clock time as a naive datetime for naive TIMESTAMP columns."""
+    return datetime.now(_TZ).replace(tzinfo=None)
+
+
+def _today_ist() -> date:
+    return datetime.now(_TZ).date()
 
 
 def _parse_time(value: str) -> Optional[time]:
@@ -132,7 +152,7 @@ async def get_today_attendance(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    today = date.today()
+    today = _today_ist()
     result = await db.execute(
         select(Attendance).where(Attendance.attendance_date == today)
     )
@@ -144,7 +164,7 @@ async def get_attendance_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    today = date.today()
+    today = _today_ist()
     
     total_employees = await db.execute(
         select(func.count(Employee.id)).where(Employee.employment_status == "ACTIVE")
@@ -193,8 +213,8 @@ async def check_in(
     if employee.employment_status != "ACTIVE":
         raise HTTPException(status_code=400, detail="Employee is not active")
     
-    today = date.today()
-    now = datetime.utcnow()
+    today = _today_ist()
+    now = _now_ist()
     
     existing_attendance = await db.execute(
         select(Attendance).where(
@@ -264,8 +284,8 @@ async def check_out(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    today = date.today()
-    now = datetime.utcnow()
+    today = _today_ist()
+    now = _now_ist()
     
     existing_attendance = await db.execute(
         select(Attendance).where(
