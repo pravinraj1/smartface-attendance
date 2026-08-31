@@ -91,6 +91,34 @@ def test_reports_csv(client, admin_headers, employee):
     assert "attachment" in rs.headers.get("content-disposition", "")
 
 
+def test_reports_pdf(client, admin_headers, employee):
+    """PDF export for daily/weekly/monthly period reports."""
+    for period in ("day", "week", "month"):
+        r = client.get(
+            f"/api/v1/reports/employee/{employee['id']}?period={period}&format=pdf",
+            headers=admin_headers,
+        )
+        assert r.status_code == 200, f"employee pdf {period}: {r.text[:200]}"
+        assert r.headers.get("content-type", "").startswith("application/pdf")
+        assert r.content[:5] == b"%PDF-"
+
+    rd = client.get(
+        f"/api/v1/reports/department/{employee['department_id']}?period=week&format=pdf",
+        headers=admin_headers,
+    )
+    assert rd.status_code == 200
+    assert rd.content[:5] == b"%PDF-"
+
+    rs = client.get("/api/v1/reports/summary?period=month&format=pdf", headers=admin_headers)
+    assert rs.status_code == 200
+    assert rs.content[:5] == b"%PDF-"
+
+
+def test_reports_period_invalid(client, admin_headers):
+    r = client.get("/api/v1/reports/summary?period=year", headers=admin_headers)
+    assert r.status_code == 422
+
+
 def test_invalid_report_format_rejected(client, admin_headers, employee):
     r = client.get(f"/api/v1/reports/employee/{employee['id']}?format=exe", headers=admin_headers)
     assert r.status_code == 422

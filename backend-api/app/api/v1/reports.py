@@ -5,7 +5,8 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional, List
-from datetime import date
+from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -13,8 +14,20 @@ from app.models.user import User
 from app.models.attendance import Attendance
 from app.models.employee import Employee
 from app.models.department import Department
+from app.services.report_pdf import build_table_pdf, minutes_to_hours
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
+
+try:
+    _TZ = ZoneInfo("Asia/Kolkata")
+except Exception:  # pragma: no cover
+    from datetime import timezone
+    _TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def _today_ist() -> date:
+    from datetime import datetime
+    return datetime.now(_TZ).date()
 
 
 def _date_filter(query, start_date, end_date):
@@ -42,6 +55,57 @@ def _csv_response(rows: List[dict], filename: str) -> Response:
     )
 
 
+def _pdf_response(content: bytes, filename: str) -> Response:
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _resolve_period(period: Optional[str], start_date: Optional[date], end_date: Optional[date]):
+    """Resolve a date range. A named `period` (day/week/month) takes
+    precedence; otherwise falls back to the given start/end dates."""
+    start = start_date
+    end = end_date
+    today = _today_ist()
+
+    if period:
+        if period == "day":
+            start = end = today
+        elif period == "week":
+            # Monday-based week containing today.
+            start = today - timedelta(days=today.weekday())
+            end = start + timedelta(days=6)
+        elif period == "month":
+            start = today.replace(day=1)
+            next_month = (start + timedelta(days=32)).replace(day=1)
+            end = next_month - timedelta(days=1)
+        else:
+            raise HTTPException(status_code=400, detail="period must be one of: day, week, month")
+        if end < start:
+            end = start
+
+    return start, end
+
+
+def _period_label(period: Optional[str], start_date: Optional[date], end_date: Optional[date]) -> str:
+    if period == "day":
+        return f"Daily Report - {_today_ist()}"
+    if period == "week":
+        s = start_date or _today_ist()
+        e = end_date or s
+        return f"Weekly Report - {s} to {e}"
+    if period == "month":
+        s = start_date or _today_ist()
+        e = end_date or s
+        return f"Monthly Report - {s} to {e}"
+    if not start_date and not end_date:
+        return "Attendance Report - All Time"
+    return f"Attendance Report - {start_date or '...'} to {end_date or '...'}"
+
+
+
 async def _resolve_employees(db, emp_ids) -> dict:
     ids = list({e for e in emp_ids if e is not None})
     if not ids:
@@ -52,21 +116,28 @@ async def _resolve_employees(db, emp_ids) -> dict:
 
 @router.get("/summary")
 async def report_summary(
+    period: Optional[str] = Query(None, pattern="^(day|week|month)$"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     department_id: Optional[str] = None,
-    format: Optional[str] = Query(None, pattern="^(csv|json)$"),
+    employee_id: Optional[str] = None,
+    format: Optional[str] = Query(None, pattern="^(csv|pdf|json)$"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    start_date, end_date = _resolve_period(period, start_date, end_date)
+
     total_employees = (await db.execute(select(func.count(Employee.id)))).scalar() or 0
 
-    emp_ids = None
-    if department_id:
+    emp_ids = list({e for e in [employee_id] if e}) if employee_id else None
+    if not emp_ids and department_id:
         emp_result = await db.execute(
             select(Employee.id).where(Employee.department_id == department_id)
         )
         emp_ids = list(emp_result.scalars().all())
+
+    if employee_id:
+        emp_ids = [employee_id]
 
     att_query = select(Attendance)
     if emp_ids:
@@ -81,10 +152,15 @@ async def report_summary(
 
     unique_dates = {r.attendance_date for r in records}
     total_working_days = len(unique_dates)
-    active_emp_days = max(total_employees * total_working_days, 1)
+
+    if emp_ids is not None:
+        eff_total_employees = len(set(emp_ids))
+    else:
+        eff_total_employees = total_employees
+    active_emp_days = max(eff_total_employees * total_working_days, 1)
     avg_attendance_rate = present / active_emp_days if active_emp_days else 0.0
 
-    total_absences = max(total_employees * total_working_days - present, 0)
+    total_absences = max(eff_total_employees * total_working_days - present, 0)
 
     # Department breakdown
     dept_query = select(Department).where(Department.is_active == True)
@@ -96,6 +172,8 @@ async def report_summary(
             select(Employee.id).where(Employee.department_id == dept.id)
         )
         dept_emp_ids = list(dept_emp_ids_res.scalars().all())
+        if emp_ids is not None:
+            dept_emp_ids = [e for e in dept_emp_ids if e in set(emp_ids)]
         if not dept_emp_ids:
             continue
         d_query = select(Attendance).where(Attendance.employee_id.in_(dept_emp_ids))
@@ -118,7 +196,7 @@ async def report_summary(
         "avg_attendance_rate": round(avg_attendance_rate, 4),
         "total_absences": total_absences,
         "total_records": total_records,
-        "total_employees": total_employees,
+        "total_employees": eff_total_employees,
         "present_days": present,
         "late_days": late,
         "department_summary": department_summary,
@@ -134,12 +212,37 @@ async def report_summary(
         } for d in department_summary]
         rows.append({
             "department_name": "ALL",
-            "total_employees": total_employees,
+            "total_employees": eff_total_employees,
             "present_days": present,
             "absent_days": total_absences,
             "late_days": late,
         })
         return _csv_response(rows, "attendance_summary.csv")
+
+    if format == "pdf":
+        summary_block = [
+            ("Period", _period_label(period, start_date, end_date)),
+            ("Employees", str(eff_total_employees)),
+            ("Working Days", str(total_working_days)),
+            ("Present", str(present)),
+            ("Absent", str(total_absences)),
+            ("Late", str(late)),
+            ("Attendance Rate", f"{round(avg_attendance_rate * 100, 1)}%"),
+        ]
+        cols = ["Department", "Employees", "Present", "Absent", "Late"]
+        pdf_rows = [
+            [d["department_name"], str(d["total_employees"]), str(d["present_days"]),
+             str(d["absent_days"]), str(d["late_days"])]
+            for d in department_summary
+        ]
+        pdf_rows.append(["ALL", str(eff_total_employees), str(present), str(total_absences), str(late)])
+        pdf = build_table_pdf(
+            _period_label(period, start_date, end_date) or "Attendance Summary",
+            "Department-wise attendance summary",
+            cols, pdf_rows,
+            summary_block=summary_block,
+        )
+        return _pdf_response(pdf, "attendance_summary.pdf")
 
     return data
 
@@ -147,15 +250,18 @@ async def report_summary(
 @router.get("/employee/{employee_id}")
 async def report_employee(
     employee_id: str,
+    period: Optional[str] = Query(None, pattern="^(day|week|month)$"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    format: Optional[str] = Query(None, pattern="^(csv|json)$"),
+    format: Optional[str] = Query(None, pattern="^(csv|pdf|json)$"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     employee = (await db.execute(select(Employee).where(Employee.id == employee_id))).scalar_one_or_none()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
+
+    start_date, end_date = _resolve_period(period, start_date, end_date)
 
     query = select(Attendance).where(Attendance.employee_id == employee_id)
     query = _date_filter(query, start_date, end_date)
@@ -187,6 +293,38 @@ async def report_employee(
         } for rc in records_payload]
         return _csv_response(rows, f"employee_report_{employee.employee_code}.csv")
 
+    if format == "pdf":
+        summary_block = [
+            ("Employee", f"{employee.full_name} ({employee.employee_code})"),
+            ("Period", _period_label(period, start_date, end_date)),
+            ("Working Days", str(days)),
+            ("Present", str(present)),
+            ("Absent", str(max(days - present, 0))),
+            ("Late", str(late)),
+            ("Total Hours", minutes_to_hours(total_work_minutes)),
+            ("Attendance Rate", f"{round(present / days * 100, 1) if days else 0}%"),
+        ]
+        def _fmt_time(iso: Optional[str]) -> str:
+            if not iso:
+                return "-"
+            t = iso[11:16]
+            return t
+        cols = ["Date", "Check In", "Check Out", "Hours", "Status", "Late (min)"]
+        pdf_rows = [
+            [rc["date"], _fmt_time(rc["check_in"]), _fmt_time(rc["check_out"]),
+             minutes_to_hours(rc["work_minutes"]), rc["status"] or "-", str(rc["late_minutes"] or 0)]
+            for rc in records_payload
+        ]
+        if not pdf_rows:
+            pdf_rows = [["No attendance records in this period", "-", "-", "-", "-", "-"]]
+        pdf = build_table_pdf(
+            _period_label(period, start_date, end_date) or "Employee Report",
+            f"{employee.full_name} ({employee.employee_code})",
+            cols, pdf_rows,
+            summary_block=summary_block,
+        )
+        return _pdf_response(pdf, f"employee_report_{employee.employee_code}.pdf")
+
     return {
         "employee_id": employee_id,
         "employee_name": employee.full_name,
@@ -204,15 +342,18 @@ async def report_employee(
 @router.get("/department/{department_id}")
 async def report_department(
     department_id: str,
+    period: Optional[str] = Query(None, pattern="^(day|week|month)$"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    format: Optional[str] = Query(None, pattern="^(csv|json)$"),
+    format: Optional[str] = Query(None, pattern="^(csv|pdf|json)$"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     department = (await db.execute(select(Department).where(Department.id == department_id))).scalar_one_or_none()
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
+
+    start_date, end_date = _resolve_period(period, start_date, end_date)
 
     emp_ids_res = await db.execute(select(Employee.id).where(Employee.department_id == department_id))
     emp_ids = list(emp_ids_res.scalars().all())
@@ -230,6 +371,14 @@ async def report_department(
         }
         if format == "csv":
             return _csv_response([], f"department_report_{department.name}.csv")
+        if format == "pdf":
+            pdf = build_table_pdf(
+                _period_label(period, start_date, end_date) or "Department Report",
+                department.name,
+                ["Employee", "Date", "Check In", "Check Out", "Hours", "Status"],
+                [["No employees in this department", "-", "-", "-", "-", "-"]],
+            )
+            return _pdf_response(pdf, f"department_report_{department.name}.pdf")
         return empty
 
     query = select(Attendance)
@@ -262,6 +411,38 @@ async def report_department(
     if format == "csv":
         rows = [{k: v for k, v in rc.items() if k != "employee_id"} for rc in records_payload]
         return _csv_response(rows, f"department_report_{department.name}.csv")
+
+    if format == "pdf":
+        def _fmt_time(iso: Optional[str]) -> str:
+            if not iso:
+                return "-"
+            return iso[11:16]
+        summary_block = [
+            ("Department", department.name),
+            ("Period", _period_label(period, start_date, end_date)),
+            ("Employees", str(len(emp_ids))),
+            ("Present", str(present)),
+            ("Absent", str(max(total_slots - present, 0))),
+            ("Late", str(late)),
+            ("Attendance Rate", f"{round(present / total_slots * 100, 1) if total_slots else 0}%"),
+        ]
+        cols = ["Employee", "Code", "Date", "In", "Out", "Hours", "Status"]
+        pdf_rows = [
+            [rc["employee_name"] or "-", rc["employee_code"] or "-", rc["date"],
+             _fmt_time(rc["check_in"]), _fmt_time(rc["check_out"]),
+             minutes_to_hours(rc["work_minutes"]), rc["status"] or "-"]
+            for rc in records_payload
+        ]
+        if not pdf_rows:
+            pdf_rows = [["No attendance records in this period", "-", "-", "-", "-", "-", "-"]]
+        pdf = build_table_pdf(
+            _period_label(period, start_date, end_date) or "Department Report",
+            department.name,
+            cols, pdf_rows,
+            summary_block=summary_block,
+            landscape_page=True,
+        )
+        return _pdf_response(pdf, f"department_report_{department.name}.pdf")
 
     return {
         "department_id": department_id,

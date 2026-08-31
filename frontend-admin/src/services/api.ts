@@ -92,14 +92,20 @@ export const faceAPI = {
 };
 
 export const reportsAPI = {
-  getSummary: (params?: { start_date?: string; end_date?: string; department_id?: string }) =>
+  getSummary: (params?: { period?: string; start_date?: string; end_date?: string; department_id?: string; employee_id?: string }) =>
     api.get('/reports/summary', { params }),
-  getEmployeeReport: (employeeId: string, params?: { start_date?: string; end_date?: string }) =>
+  getEmployeeReport: (employeeId: string, params?: { period?: string; start_date?: string; end_date?: string }) =>
     api.get(`/reports/employee/${employeeId}`, { params }),
-  getDepartmentReport: (departmentId: string, params?: { start_date?: string; end_date?: string }) =>
+  getDepartmentReport: (departmentId: string, params?: { period?: string; start_date?: string; end_date?: string }) =>
     api.get(`/reports/department/${departmentId}`, { params }),
-  exportSummary: (params?: { start_date?: string; end_date?: string; department_id?: string }) =>
+  exportSummary: (params?: { period?: string; start_date?: string; end_date?: string; department_id?: string; employee_id?: string }) =>
     api.get('/reports/summary', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
+  exportSummaryPdf: (params?: { period?: string; start_date?: string; end_date?: string; department_id?: string; employee_id?: string }) =>
+    api.get('/reports/summary', { params: { ...params, format: 'pdf' }, responseType: 'blob' }),
+  exportEmployeePdf: (employeeId: string, params?: { period?: string; start_date?: string; end_date?: string }) =>
+    api.get(`/reports/employee/${employeeId}`, { params: { ...params, format: 'pdf' }, responseType: 'blob' }),
+  exportDepartmentPdf: (departmentId: string, params?: { period?: string; start_date?: string; end_date?: string }) =>
+    api.get(`/reports/department/${departmentId}`, { params: { ...params, format: 'pdf' }, responseType: 'blob' }),
 };
 
 export const erpAPI = {
