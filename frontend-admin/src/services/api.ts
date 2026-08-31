@@ -55,6 +55,7 @@ export const employeeAPI = {
     api.get('/employees', { params }),
   getById: (id: string) => api.get(`/employees/${id}`),
   create: (data: any) => api.post('/employees', data),
+  bulk: (data: any) => api.post('/employees/bulk', data),
   update: (id: string, data: any) => api.put(`/employees/${id}`, data),
   delete: (id: string) => api.delete(`/employees/${id}`),
 };

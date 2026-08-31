@@ -22,7 +22,7 @@ import {
   Chip,
   InputAdornment,
 } from '@mui/material';
-import { Edit as EditIcon, Delete as DeleteIcon, Add as AddIcon, Search as SearchIcon } from '@mui/icons-material';
+import { Edit as EditIcon, Delete as DeleteIcon, Add as AddIcon, Search as SearchIcon, Upload as UploadIcon } from '@mui/icons-material';
 import { employeeAPI, departmentAPI } from '../services/api';
 
 interface Employee {
@@ -43,6 +43,10 @@ interface Department {
 
 export default function Employees() {
   const [open, setOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkDept, setBulkDept] = useState('');
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [search, setSearch] = useState('');
   const [formData, setFormData] = useState({
@@ -79,6 +83,36 @@ export default function Employees() {
     mutationFn: (id: string) => employeeAPI.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employees'] }),
   });
+
+  const bulkMutation = useMutation({
+    mutationFn: (data: any) => employeeAPI.bulk(data),
+    onSuccess: (res) => {
+      const d = res.data;
+      setBulkResult(
+        `Imported ${d.imported} of ${d.total_received}.` +
+        (d.skipped?.length ? `\nSkipped ${d.skipped.length}: ${d.skipped.map((s: any) => `${s.employee_code} (${s.reason})`).join(', ')}` : '') +
+        (d.errors?.length ? `\nErrors ${d.errors.length}: ${d.errors.map((e: any) => `${e.employee_code} (${e.error})`).join(', ')}` : '')
+      );
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+    },
+    onError: (err: any) => setBulkResult(`Import failed: ${err?.response?.data?.detail || err.message}`),
+  });
+
+  const handleBulkSubmit = () => {
+    const lines = bulkText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const employees = lines.map((line) => {
+      const parts = line.split(',').map((p) => p.trim());
+      return {
+        employee_code: parts[0],
+        full_name: parts[1] || parts[0],
+        mobile_number: parts[2] || undefined,
+        department_id: bulkDept || undefined,
+        employment_status: 'ACTIVE',
+      };
+    });
+    setBulkResult(null);
+    bulkMutation.mutate({ employees });
+  };
 
   const handleOpen = (employee?: Employee) => {
     if (employee) {
@@ -138,9 +172,14 @@ export default function Employees() {
           <Typography variant="h4" sx={{ mb: 0.5 }}>Employees</Typography>
           <Typography variant="body2" sx={{ color: '#718096' }}>{employees.length} total employees</Typography>
         </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
-          Add Employee
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => { setBulkOpen(true); setBulkText(''); setBulkResult(null); }}>
+            Bulk Import
+          </Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()}>
+            Add Employee
+          </Button>
+        </Box>
       </Box>
 
       <Card sx={{ mb: 2 }}>
@@ -234,6 +273,48 @@ export default function Employees() {
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={handleClose} variant="outlined" size="small">Cancel</Button>
           <Button onClick={handleSubmit} variant="contained" size="small">{selectedEmployee ? 'Update' : 'Create'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={bulkOpen} onClose={() => setBulkOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 600 }}>Bulk Import Employees</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: '#718096', mb: 1 }}>
+            Paste one employee per line: <code>employee_code, full_name, mobile_number</code>. Up to 500 rows. Duplicate codes/mobiles are skipped automatically.
+          </Typography>
+          <TextField
+            multiline
+            fullWidth
+            minRows={8}
+            size="small"
+            placeholder={"EMP001, John Doe, 9876543210\nEMP002, Jane Smith, 9123456789"}
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+            slotProps={{ input: { style: { fontFamily: 'monospace', fontSize: '0.85rem' } } }}
+          />
+          <TextField
+            margin="dense"
+            label="Department (optional, applies to all)"
+            fullWidth
+            size="small"
+            select
+            value={bulkDept}
+            onChange={(e) => setBulkDept(e.target.value)}
+          >
+            <MenuItem value=""><em>None</em></MenuItem>
+            {departments?.map((dept: Department) => (<MenuItem key={dept.id} value={dept.id}>{dept.name}</MenuItem>))}
+          </TextField>
+          {bulkResult && (
+            <Typography variant="body2" sx={{ mt: 1.5, whiteSpace: 'pre-wrap', color: bulkResult.startsWith('Import failed') ? '#c53030' : '#2f855a', backgroundColor: '#f7fafc', p: 1.5, borderRadius: 1, fontWeight: 500 }}>
+              {bulkResult}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setBulkOpen(false)} variant="outlined" size="small">Close</Button>
+          <Button onClick={handleBulkSubmit} variant="contained" size="small" disabled={!bulkText.trim() || bulkMutation.isPending}>
+            {bulkMutation.isPending ? 'Importing...' : 'Import'}
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
