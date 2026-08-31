@@ -39,6 +39,15 @@ export default function FaceRecognition() {
 
   const logs = logsData?.logs || [];
 
+  const avgConfidence = logs.length > 0
+    ? (logs.reduce((sum: number, l: RecognitionLog) => sum + (Number(l.confidence) || 0), 0) / logs.length * 100).toFixed(1)
+    : '0';
+
+  const todayCount = logs.filter((l: RecognitionLog) => {
+    const today = new Date().toISOString().split('T')[0];
+    return l.recognized_at?.startsWith(today);
+  }).length;
+
   return (
     <Box>
       <Box sx={{ mb: 3 }}>
@@ -84,9 +93,7 @@ export default function FaceRecognition() {
                   Avg Confidence
                 </Typography>
                 <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                  {logs.length > 0
-                    ? `${(logs.reduce((sum: number, l: RecognitionLog) => sum + l.confidence, 0) / logs.length * 100).toFixed(1)}%`
-                    : '0%'}
+                  {avgConfidence}%
                 </Typography>
               </Box>
             </CardContent>
@@ -106,10 +113,7 @@ export default function FaceRecognition() {
                   Today's Recognitions
                 </Typography>
                 <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                  {logs.filter((l: RecognitionLog) => {
-                    const today = new Date().toISOString().split('T')[0];
-                    return l.recognized_at?.startsWith(today);
-                  }).length}
+                  {todayCount}
                 </Typography>
               </Box>
             </CardContent>
@@ -171,11 +175,11 @@ export default function FaceRecognition() {
                       </TableCell>
                       <TableCell>
                         <Chip
-                          label={`${(log.confidence * 100).toFixed(1)}%`}
+                          label={`${((Number(log.confidence) || 0) * 100).toFixed(1)}%`}
                           size="small"
                           sx={{
-                            backgroundColor: log.confidence >= 0.7 ? '#f0fff4' : log.confidence >= 0.4 ? '#fffaf0' : '#fff5f5',
-                            color: log.confidence >= 0.7 ? '#2f855a' : log.confidence >= 0.4 ? '#c05621' : '#c53030',
+                            backgroundColor: Number(log.confidence) >= 0.7 ? '#f0fff4' : Number(log.confidence) >= 0.4 ? '#fffaf0' : '#fff5f5',
+                            color: Number(log.confidence) >= 0.7 ? '#2f855a' : Number(log.confidence) >= 0.4 ? '#c05621' : '#c53030',
                             fontWeight: 600,
                             fontSize: '0.7rem',
                           }}

@@ -14,6 +14,7 @@ import FaceEnrollment from './pages/FaceEnrollment';
 import FaceRecognition from './pages/FaceRecognition';
 import ERPIntegration from './pages/ERPIntegration';
 import Layout from './components/Layout';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const queryClient = new QueryClient();
 
@@ -138,7 +139,8 @@ function App() {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <Router>
-          <Routes>
+          <ErrorBoundary>
+            <Routes>
             <Route path="/login" element={<Login />} />
             <Route
               path="/"
@@ -157,7 +159,8 @@ function App() {
               <Route path="reports" element={<Reports />} />
               <Route path="erp-integration" element={<ERPIntegration />} />
             </Route>
-          </Routes>
+            </Routes>
+          </ErrorBoundary>
         </Router>
       </ThemeProvider>
     </QueryClientProvider>
