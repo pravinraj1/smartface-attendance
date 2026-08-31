@@ -150,9 +150,9 @@ export default function Employees() {
             placeholder="Search employees..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            InputProps={{
+            slotProps={{ input: {
               startAdornment: <InputAdornment position="start"><SearchIcon sx={{ color: '#a0aec0' }} /></InputAdornment>,
-            }}
+            } }}
             sx={{ width: 300 }}
           />
         </CardContent>

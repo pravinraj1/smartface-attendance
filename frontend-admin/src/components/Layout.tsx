@@ -104,7 +104,7 @@ export default function Layout() {
               <ListItemButton
                 selected={isActive}
                 onClick={() => {
-                  navigate(item.path);
+                  if ('path' in item) navigate((item as { path: string }).path);
                   setMobileOpen(false);
                 }}
                 sx={{
@@ -121,10 +121,14 @@ export default function Layout() {
                 </ListItemIcon>
                 <ListItemText
                   primary={item.text}
-                  primaryTypographyProps={{
-                    fontSize: '0.875rem',
-                    fontWeight: isActive ? 600 : 500,
-                    color: isActive ? '#2b6cb0' : '#4a5568',
+                  slotProps={{
+                    primary: {
+                      sx: {
+                        fontSize: '0.875rem',
+                        fontWeight: isActive ? 600 : 500,
+                        color: isActive ? '#2b6cb0' : '#4a5568',
+                      },
+                    },
                   }}
                 />
               </ListItemButton>

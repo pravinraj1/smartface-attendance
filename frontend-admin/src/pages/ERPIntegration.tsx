@@ -155,13 +155,13 @@ export default function ERPIntegration() {
             <Box sx={{ px: 3 }}>
               <Typography variant="h6" sx={{ mb: 2 }}>ERP Server Configuration</Typography>
               <Grid container spacing={2}>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <TextField fullWidth size="small" label="ERP Base URL" placeholder="https://your-erp.com/api" value={configForm.erp_base_url} onChange={(e) => setConfigForm({ ...configForm, erp_base_url: e.target.value })} />
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <TextField fullWidth size="small" label="API Key" value={configForm.erp_api_key} onChange={(e) => setConfigForm({ ...configForm, erp_api_key: e.target.value })} />
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <TextField fullWidth size="small" select label="Export Format" value={configForm.export_format} onChange={(e) => setConfigForm({ ...configForm, export_format: e.target.value })}>
                     <MenuItem value="xml">XML</MenuItem>
                     <MenuItem value="json">JSON</MenuItem>
@@ -173,15 +173,15 @@ export default function ERPIntegration() {
 
               <Typography variant="h6" sx={{ mb: 2 }}>Push Configuration</Typography>
               <Grid container spacing={2}>
-                <Grid item xs={12}>
+                <Grid size={{ xs: 12 }}>
                   <FormControlLabel control={<Switch checked={configForm.push_enabled} onChange={(e) => setConfigForm({ ...configForm, push_enabled: e.target.checked })} />} label="Enable auto-push to ERP" />
                 </Grid>
                 {configForm.push_enabled && (
                   <>
-                    <Grid item xs={12} md={8}>
+                    <Grid size={{ xs: 12, md: 8 }}>
                       <TextField fullWidth size="small" label="Push Endpoint" placeholder="https://your-erp.com/api/attendance/import" value={configForm.push_endpoint} onChange={(e) => setConfigForm({ ...configForm, push_endpoint: e.target.value })} />
                     </Grid>
-                    <Grid item xs={12} md={4}>
+                    <Grid size={{ xs: 12, md: 4 }}>
                       <TextField fullWidth size="small" label="Auth Header" placeholder="Bearer token..." value={configForm.push_auth_header} onChange={(e) => setConfigForm({ ...configForm, push_auth_header: e.target.value })} />
                     </Grid>
                   </>
@@ -201,7 +201,7 @@ export default function ERPIntegration() {
           <TabPanel value={tab} index={1}>
             <Box sx={{ px: 3 }}>
               <Grid container spacing={2.5}>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <Card variant="outlined" sx={{ height: '100%' }}>
                     <CardContent>
                       <Typography variant="h6" sx={{ mb: 1 }}>Export Attendance Data</Typography>
@@ -219,7 +219,7 @@ export default function ERPIntegration() {
                     </CardContent>
                   </Card>
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <Card variant="outlined" sx={{ height: '100%' }}>
                     <CardContent>
                       <Typography variant="h6" sx={{ mb: 1 }}>Push to ERP</Typography>
@@ -249,13 +249,13 @@ export default function ERPIntegration() {
             <Box sx={{ px: 3 }}>
               <Typography variant="h6" sx={{ mb: 2 }}>Webhook Configuration</Typography>
               <Grid container spacing={2}>
-                <Grid item xs={12}>
+                <Grid size={{ xs: 12 }}>
                   <FormControlLabel control={<Switch checked={configForm.webhook_enabled} onChange={(e) => setConfigForm({ ...configForm, webhook_enabled: e.target.checked })} />} label="Enable webhooks" />
                 </Grid>
-                <Grid item xs={12} md={8}>
+                <Grid size={{ xs: 12, md: 8 }}>
                   <TextField fullWidth size="small" label="Webhook URL" placeholder="https://your-system.com/webhook/attendance" value={configForm.webhook_url} onChange={(e) => setConfigForm({ ...configForm, webhook_url: e.target.value })} disabled={!configForm.webhook_enabled} />
                 </Grid>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, md: 4 }}>
                   <TextField fullWidth size="small" label="Webhook Secret" value={configForm.webhook_secret} onChange={(e) => setConfigForm({ ...configForm, webhook_secret: e.target.value })} disabled={!configForm.webhook_enabled} />
                 </Grid>
               </Grid>

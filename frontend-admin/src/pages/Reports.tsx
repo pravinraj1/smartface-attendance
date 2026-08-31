@@ -62,8 +62,8 @@ export default function Reports() {
       {/* Filters */}
       <Card sx={{ mb: 2.5 }}>
         <CardContent sx={{ py: 2.5 }}>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={2}>
+          <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <TextField
                 size="small"
                 type="date"
@@ -71,10 +71,10 @@ export default function Reports() {
                 fullWidth
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
-            <Grid item xs={12} md={2}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <TextField
                 size="small"
                 type="date"
@@ -82,10 +82,10 @@ export default function Reports() {
                 fullWidth
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
-            <Grid item xs={12} md={2}>
+            <Grid size={{ xs: 12, md: 2 }}>
               <TextField
                 size="small"
                 label="Department ID"
@@ -94,12 +94,12 @@ export default function Reports() {
                 onChange={(e) => setDepartmentId(e.target.value)}
               />
             </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid size={{ xs: 12, md: 3 }}>
               <Button variant="contained" fullWidth sx={{ py: 1.05 }} onClick={() => refetch()}>
                 Generate Report
               </Button>
             </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid size={{ xs: 12, md: 3 }}>
               <Button
                 variant="outlined"
                 fullWidth
@@ -116,7 +116,7 @@ export default function Reports() {
 
       {/* Summary Cards */}
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{
@@ -136,7 +136,7 @@ export default function Reports() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{
@@ -156,7 +156,7 @@ export default function Reports() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{

@@ -13,6 +13,23 @@ const Duration kHttpTimeout = Duration(seconds: 15);
 const Duration kFaceRecognitionTimeout = Duration(seconds: 30);
 const Duration kServerCheckInterval = Duration(seconds: 30);
 
+typedef TokenResolver = Future<String?> Function({bool force});
+
+Future<http.Response> _sendAuthed(
+  TokenResolver resolve,
+  Future<http.Response> Function(String? token) request,
+) async {
+  var token = await resolve();
+  var response = await request(token);
+  if (response.statusCode == 401) {
+    final fresh = await resolve(force: true);
+    if (fresh != null) {
+      response = await request(fresh);
+    }
+  }
+  return response;
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final cameras = await availableCameras();
@@ -98,7 +115,7 @@ class _KioskHomeState extends State<KioskHome> {
         _serverOnline = response.statusCode == 200;
         _serverError = '';
       });
-      if (wasOffline && _serverOnline && _authToken == null) {
+      if (wasOffline && _serverOnline) {
         _login();
       }
     } catch (e) {
@@ -134,6 +151,13 @@ class _KioskHomeState extends State<KioskHome> {
       });
       debugPrint('Login failed: $e');
     }
+  }
+
+  Future<String?> _ensureToken({bool force = false}) async {
+    if (_authToken == null || force) {
+      await _login();
+    }
+    return _authToken;
   }
 
   void _showSettings() {
@@ -186,14 +210,14 @@ class _KioskHomeState extends State<KioskHome> {
                   key: ValueKey('att_$_serverIp'),
                   cameras: widget.cameras,
                   apiBaseUrl: kApiBaseUrl,
-                  authToken: _authToken,
+                  tokenResolver: _ensureToken,
                   onSettings: _showSettings,
                 )
               : EnrollmentMode(
                   key: ValueKey('enr_$_serverIp'),
                   cameras: widget.cameras,
                   apiBaseUrl: kApiBaseUrl,
-                  authToken: _authToken,
+                  tokenResolver: _ensureToken,
                   onSettings: _showSettings,
                 ),
           // Server offline banner
@@ -242,13 +266,13 @@ class _KioskHomeState extends State<KioskHome> {
 class AttendanceMode extends StatefulWidget {
   final List<CameraDescription> cameras;
   final String apiBaseUrl;
-  final String? authToken;
+  final TokenResolver tokenResolver;
   final VoidCallback onSettings;
   const AttendanceMode({
     super.key,
     required this.cameras,
     required this.apiBaseUrl,
-    required this.authToken,
+    required this.tokenResolver,
     required this.onSettings,
   });
 
@@ -301,9 +325,9 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
     super.dispose();
   }
 
-  Map<String, String> get _headers => {
+  Map<String, String> _headers(String? token) => {
     'Content-Type': 'application/json',
-    if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+    if (token != null) 'Authorization': 'Bearer $token',
   };
 
   void _startAutoScan() {
@@ -315,7 +339,8 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
   Future<void> _autoScan() async {
     if (!_controller.value.isInitialized || _isProcessing) return;
 
-    if (widget.authToken == null) {
+    final token = await widget.tokenResolver();
+    if (token == null) {
       setState(() => _status = 'Waiting for server...');
       return;
     }
@@ -336,11 +361,11 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
       final bytes = await image.readAsBytes();
       final b64 = base64Encode(bytes);
 
-      final response = await http.post(
+      final response = await _sendAuthed(widget.tokenResolver, (token) => http.post(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/recognize'),
-        headers: _headers,
+        headers: _headers(token),
         body: json.encode({'image_data': b64}),
-      ).timeout(kFaceRecognitionTimeout);
+      ).timeout(kFaceRecognitionTimeout));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -359,11 +384,11 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             _lastSuccessTime = DateTime.now();
           });
 
-          final checkinResponse = await http.post(
+          final checkinResponse = await _sendAuthed(widget.tokenResolver, (token) => http.post(
             Uri.parse('${widget.apiBaseUrl}$kApiPrefix/attendance/checkin'),
-            headers: _headers,
+            headers: _headers(token),
             body: json.encode({'employee_id': employeeId, 'confidence_score': confidence}),
-          ).timeout(kHttpTimeout);
+          ).timeout(kHttpTimeout));
 
           if (checkinResponse.statusCode == 200) {
             final checkinData = json.decode(checkinResponse.body);
@@ -373,11 +398,11 @@ class _AttendanceModeState extends State<AttendanceMode> with SingleTickerProvid
             final msg = errBody['detail'] ?? '';
             if (msg.toString().toLowerCase().contains('already checked in')) {
               setState(() => _status = 'Checking out...');
-              final checkoutResponse = await http.post(
+              final checkoutResponse = await _sendAuthed(widget.tokenResolver, (token) => http.post(
                 Uri.parse('${widget.apiBaseUrl}$kApiPrefix/attendance/checkout'),
-                headers: _headers,
+                headers: _headers(token),
                 body: json.encode({'employee_id': employeeId, 'confidence_score': confidence}),
-              ).timeout(kHttpTimeout);
+              ).timeout(kHttpTimeout));
               if (checkoutResponse.statusCode == 200) {
                 setState(() {
                   _status = 'CHECK-OUT SUCCESS';
@@ -570,13 +595,13 @@ class ScannerCornerPainter extends CustomPainter {
 class EnrollmentMode extends StatefulWidget {
   final List<CameraDescription> cameras;
   final String apiBaseUrl;
-  final String? authToken;
+  final TokenResolver tokenResolver;
   final VoidCallback onSettings;
   const EnrollmentMode({
     super.key,
     required this.cameras,
     required this.apiBaseUrl,
-    required this.authToken,
+    required this.tokenResolver,
     required this.onSettings,
   });
 
@@ -591,6 +616,7 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
   String? _selectedEmployeeId;
   String _selectedEmployeeName = '';
   bool _loadingEmployees = true;
+  bool _loadFailed = false;
   bool _isCapturing = false;
   bool _isUploading = false;
   String _resultMessage = '';
@@ -608,7 +634,7 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
   }
 
   void _initCamera(CameraDescription cam) {
-    _controller = CameraController(cam, ResolutionPreset.high, enableAudio: false);
+    _controller = CameraController(cam, ResolutionPreset.medium, enableAudio: false);
     _initFuture = _controller.initialize();
   }
 
@@ -618,37 +644,41 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
     super.dispose();
   }
 
-  Map<String, String> get _headers => {
+  Map<String, String> _headers(String? token) => {
     'Content-Type': 'application/json',
-    if (widget.authToken != null) 'Authorization': 'Bearer ${widget.authToken}',
+    if (token != null) 'Authorization': 'Bearer $token',
   };
 
   Future<void> _fetchEmployees() async {
     try {
-      final response = await http.get(
+      final response = await _sendAuthed(widget.tokenResolver, (token) => http.get(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/employees?limit=500'),
-        headers: _headers,
-      ).timeout(kHttpTimeout);
+        headers: _headers(token),
+      ).timeout(kHttpTimeout));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         setState(() {
           _employees = data['employees'] ?? [];
           _loadingEmployees = false;
+          _loadFailed = false;
         });
       } else {
         setState(() {
           _loadingEmployees = false;
+          _loadFailed = true;
           _resultMessage = 'Failed to load employees (${response.statusCode})';
         });
       }
     } on TimeoutException {
       setState(() {
         _loadingEmployees = false;
+        _loadFailed = true;
         _resultMessage = 'Server timeout - check connection';
       });
     } catch (e) {
       setState(() {
         _loadingEmployees = false;
+        _loadFailed = true;
         _resultMessage = 'Connection error - check server';
       });
     }
@@ -691,11 +721,11 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
       final bytes = await _lastCapture!.readAsBytes();
       final b64 = base64Encode(bytes);
 
-      final response = await http.post(
+      final response = await _sendAuthed(widget.tokenResolver, (token) => http.post(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/check-duplicate'),
-        headers: _headers,
+        headers: _headers(token),
         body: json.encode({'image': b64, 'exclude_employee_id': _selectedEmployeeId}),
-      ).timeout(kFaceRecognitionTimeout);
+      ).timeout(kFaceRecognitionTimeout));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -741,11 +771,11 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
       final bytes = await _lastCapture!.readAsBytes();
       final b64 = base64Encode(bytes);
 
-      final response = await http.post(
+      final response = await _sendAuthed(widget.tokenResolver, (token) => http.post(
         Uri.parse('${widget.apiBaseUrl}$kApiPrefix/faces/enroll'),
-        headers: _headers,
+        headers: _headers(token),
         body: json.encode({'employee_id': _selectedEmployeeId, 'image_data': b64}),
-      ).timeout(kFaceRecognitionTimeout);
+      ).timeout(kFaceRecognitionTimeout));
 
       if (response.statusCode == 200) {
         setState(() {
@@ -920,7 +950,39 @@ class _EnrollmentModeState extends State<EnrollmentMode> {
           child: _loadingEmployees
               ? const Center(child: CircularProgressIndicator())
               : _employees.isEmpty
-                  ? const Center(child: Text('No employees found. Create employees first.'))
+                  ? _loadFailed
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.cloud_off, color: Colors.grey, size: 40),
+                              const SizedBox(height: 8),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 24),
+                                child: Text(
+                                  _resultMessage.isEmpty
+                                      ? 'Failed to load employees'
+                                      : _resultMessage,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.grey),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              FilledButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    _loadingEmployees = true;
+                                    _loadFailed = false;
+                                  });
+                                  _fetchEmployees();
+                                },
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Retry'),
+                              ),
+                            ],
+                          ),
+                        )
+                      : const Center(child: Text('No employees found. Create employees first.'))
                   : ListView.builder(
                       padding: const EdgeInsets.all(8),
                       itemCount: _employees.length,

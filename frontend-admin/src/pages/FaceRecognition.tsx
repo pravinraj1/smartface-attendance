@@ -6,6 +6,7 @@ import {
   Card,
   CardContent,
   TextField,
+  MenuItem,
   Table,
   TableBody,
   TableCell,
@@ -49,7 +50,7 @@ export default function FaceRecognition() {
 
       {/* Stats */}
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{
@@ -69,7 +70,7 @@ export default function FaceRecognition() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{
@@ -91,7 +92,7 @@ export default function FaceRecognition() {
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ p: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
               <Box sx={{

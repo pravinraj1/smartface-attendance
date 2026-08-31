@@ -177,8 +177,8 @@ export default function FaceEnrollment() {
           {activeStep === 1 && (
             <Box>
               <Typography variant="h6" sx={{ mb: 2 }}>Capture Face Photo</Typography>
-              <Grid container spacing={2} alignItems="center">
-                <Grid item xs={12} md={6}>
+              <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <Paper
                     sx={{
                       height: 300,
@@ -203,7 +203,7 @@ export default function FaceEnrollment() {
                     )}
                   </Paper>
                 </Grid>
-                <Grid item xs={12} md={6}>
+                <Grid size={{ xs: 12, md: 6 }}>
                   <Button variant="contained" component="label" startIcon={<CameraIcon />}>
                     {capturedImage ? 'Retake Photo' : 'Take Photo'}
                     <input type="file" accept="image/*" capture="user" hidden onChange={handleCapture} />

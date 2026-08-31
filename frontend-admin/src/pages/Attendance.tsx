@@ -74,20 +74,20 @@ export default function Attendance() {
 
       <Card sx={{ mb: 2.5 }}>
         <CardContent sx={{ py: 2, px: 2.5 }}>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={6}>
+          <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <TextField
                 size="small"
                 placeholder="Search by name or code..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 fullWidth
-                InputProps={{
+                slotProps={{ input: {
                   startAdornment: <InputAdornment position="start"><SearchIcon sx={{ color: '#a0aec0' }} /></InputAdornment>,
-                }}
+                } }}
               />
             </Grid>
-            <Grid item xs={12} md={3}>
+            <Grid size={{ xs: 12, md: 3 }}>
               <TextField
                 size="small"
                 select
@@ -153,7 +153,7 @@ export default function Attendance() {
                   </TableCell>
                   <TableCell>
                     <Chip
-                      icon={st.icon}
+                      icon={st.icon ?? undefined}
                       label={record.status}
                       size="small"
                       sx={{

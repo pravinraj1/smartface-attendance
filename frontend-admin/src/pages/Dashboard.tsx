@@ -97,7 +97,7 @@ export default function Dashboard() {
       </Box>
 
       <Grid container spacing={2.5}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Total Employees"
             value={stats?.total_employees || 0}
@@ -106,7 +106,7 @@ export default function Dashboard() {
             bgColor="#ebf4ff"
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Present Today"
             value={stats?.present_today || 0}
@@ -115,7 +115,7 @@ export default function Dashboard() {
             bgColor="#f0fff4"
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Absent Today"
             value={stats?.absent_today || 0}
@@ -124,7 +124,7 @@ export default function Dashboard() {
             bgColor="#fff5f5"
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Late Today"
             value={stats?.late_today || 0}
