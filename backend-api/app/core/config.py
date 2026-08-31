@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     DOCS_ENABLED: bool = True
 
     FACE_MATCH_THRESHOLD: float = 0.75
+    FACE_SERVICE_URL: str = "http://localhost:8501"
     ATTENDANCE_COOLDOWN_MINUTES: int = 5
     CHECKIN_START_TIME: str = "08:00"
     LATE_AFTER_TIME: str = "09:15"

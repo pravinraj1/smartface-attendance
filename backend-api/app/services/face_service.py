@@ -1,118 +1,73 @@
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, List
 import os
 import struct
 import json
-import threading
+import base64
 import math
+
+import httpx
+
+from app.core.config import settings
 
 
 EMBEDDING_VERSION = "insightface_v1"
-MODEL_NAME = "buffalo_s"
-_MODEL_LOCK = threading.Lock()
 
 
 class FaceService:
+    """Face detection/embedding delegated to a lightweight sidecar inference
+    service (see face-service/). Keeps heavy ML deps (opencv/onnxruntime/
+    insightface) out of the main API process, which previously OOM-killed the
+    512 MB Render free instance when loading the model in-process.
+    """
+
     def __init__(self):
-        self._initialized = False
-        self._init_error: Optional[str] = None
-        self._app = None
         self._version = EMBEDDING_VERSION
-        self._ready_event = threading.Event()
+        self._service_url = (settings.FACE_SERVICE_URL or "").rstrip("/")
+
+    def _detect_endpoint(self) -> Optional[str]:
+        return f"{self._service_url}/detect" if self._service_url else None
 
     def initialize(self) -> bool:
-        if self._initialized:
-            return True
-        with _MODEL_LOCK:
-            if self._initialized:
-                return True
-            try:
-                from insightface.app import FaceAnalysis
-
-                app = FaceAnalysis(
-                    name=MODEL_NAME,
-                    allowed_modules=["detection", "recognition"],
-                )
-                # ctx_id=-1 -> CPU execution (works on Render free tier and CI)
-                app.prepare(ctx_id=-1, det_thresh=0.5)
-                self._app = app
-                self._initialized = True
-                self._init_error = None
-                self._ready_event.set()
-                print(f"Face service: InsightFace {MODEL_NAME} model loaded (CPU)")
-                return True
-            except Exception as e:  # noqa: BLE001
-                self._initialized = True
-                self._init_error = str(e)
-                print(f"Face service: InsightFace init failed: {e}")
-                return False
+        return True
 
     def warm_up(self) -> None:
-        """Load the model in the background so the first request never blocks the event loop."""
-        if self._ready_event.is_set():
-            return
-        threading.Thread(target=self.initialize, daemon=True, name="face-model-warmup").start()
+        pass
 
     def get_embedding_version(self) -> str:
         return self._version
 
     def is_ready(self) -> bool:
-        return self._app is not None and self._initialized and self._init_error is None
+        if not self._service_url:
+            return False
+        return True
 
     def detect_and_embed(self, image_bytes: bytes) -> Tuple[Optional[List[float]], Optional[dict]]:
-        try:
-            if not self._ready_event.is_set():
-                self._ready_event.wait(timeout=6.0)
-            if self._app is None or not self._initialized or self._init_error is not None:
-                print(f"Face service: not ready ({self._init_error})")
-                return None, None
-
-            import cv2
-            import numpy as np
-
-            buf = np.frombuffer(image_bytes, dtype=np.uint8)
-            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-            if img is None:
-                print("Face service: failed to decode image")
-                return None, None
-
-            faces = self._app.get(img)
-            if not faces:
-                print("Face service: no face detected")
-                return None, None
-
-            # Pick the highest-confidence face
-            best = max(faces, key=lambda f: float(f.det_score))
-
-            embedding = best.embedding
-            if embedding is None:
-                print("Face service: embedding missing for detected face")
-                return None, None
-
-            norm = np.linalg.norm(embedding)
-            if norm <= 0:
-                return None, None
-            unit = (embedding / norm).astype(float).tolist()
-
-            x1, y1, x2, y2 = [float(v) for v in best.bbox]
-            width = max(0.0, x2 - x1)
-            height = max(0.0, y2 - y1)
-            area = width * height
-            img_h, img_w = img.shape[:2]
-            img_area = max(1, img_h * img_w)
-            # Face too small relative to frame -> reject (helps kiosk "not sensing" issues)
-            quality = min(1.0, area / img_area)
-
-            detection_info: dict = {
-                "bbox": {"x": x1, "y": y1, "width": width, "height": height},
-                "confidence": float(best.det_score),
-                "quality": quality,
-                "embedding_version": self._version,
-            }
-            return unit, detection_info
-
-        except Exception as e:  # noqa: BLE001
-            print(f"Face detect error: {e}")
+        endpoint = self._detect_endpoint()
+        if not endpoint:
+            print("Face service: FACE_SERVICE_URL not configured")
             return None, None
+
+        payload = {
+            "image_data": base64.b64encode(image_bytes).decode("ascii"),
+        }
+        try:
+            resp = httpx.post(endpoint, json=payload, timeout=60.0)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Face service: sidecar unreachable: {exc}")
+            return None, None
+
+        if resp.status_code != 200:
+            print(f"Face service: sidecar returned HTTP {resp.status_code}")
+            return None, None
+
+        data = resp.json()
+        embedding = data.get("embedding")
+        detection_info = data.get("detection_info")
+        if not embedding:
+            print("Face service: no face detected")
+            return None, None
+
+        return [float(v) for v in embedding], detection_info
 
     def compare_embeddings(
         self,
@@ -123,7 +78,6 @@ class FaceService:
         if not embedding1 or not embedding2:
             return False, 0.0
         if len(embedding1) != len(embedding2):
-            # Mismatched dimension => different embedding model; never considered a match
             return False, 0.0
         dot = sum(a * b for a, b in zip(embedding1, embedding2))
         norm1 = math.sqrt(sum(a * a for a in embedding1))
