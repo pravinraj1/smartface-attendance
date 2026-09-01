@@ -16,7 +16,7 @@ import {
   Assessment as AssessmentIcon, People as PeopleIcon, AccessTime as AccessTimeIcon,
   Download as DownloadIcon, PictureAsPdf as PdfIcon,
 } from '@mui/icons-material';
-import { reportsAPI, employeeAPI } from '../services/api';
+import { reportsAPI, employeeAPI, departmentAPI } from '../services/api';
 
 type Period = '' | 'day' | 'week' | 'month';
 
@@ -67,13 +67,14 @@ export default function Reports() {
     queryKey: ['employees'],
     queryFn: () => employeeAPI.getAll().then((res) => res.data),
   });
-  const employees = employeesData?.employees || [];
+  const employeeList = employeesData?.employees;
+  const employees = Array.isArray(employeeList) ? employeeList : [];
 
   const { data: departmentsData } = useQuery({
     queryKey: ['departments'],
-    queryFn: () => fetch('/api/v1/departments').then((r) => r.json()),
+    queryFn: () => departmentAPI.getAll().then((res) => res.data),
   });
-  const departments = departmentsData || [];
+  const departments = Array.isArray(departmentsData) ? departmentsData : [];
 
   const { data: summary, isLoading: loadingSummary } = useQuery({
     queryKey: ['reportSummary', period, startDate, endDate, departmentId, employeeId],
@@ -87,6 +88,7 @@ export default function Reports() {
   });
 
   const selectedEmployee = employeeId ? employees.find((e: any) => e.id === employeeId) : null;
+  const deptSummary = Array.isArray(summary?.department_summary) ? summary!.department_summary : [];
 
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -301,8 +303,8 @@ export default function Reports() {
         <Card>
           <CardContent sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ mb: 2 }}>Department Breakdown</Typography>
-            {summary?.department_summary?.length > 0 ? (
-              summary.department_summary.map((dept: any) => (
+            {deptSummary.length > 0 ? (
+              deptSummary.map((dept: any) => (
                 <Box key={dept.department_id} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1.5, borderBottom: '1px solid #edf2f7', '&:last-child': { borderBottom: 'none' } }}>
                   <Box>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>{dept.department_name}</Typography>
