@@ -126,6 +126,8 @@ async def _maybe_auto_checkout(db: AsyncSession, employee: Employee, now: dateti
     fallback when no shift is assigned), close it now, computing total/normal/OT.
     This keeps stale open records from blocking the next check-in and prevents
     blindly applying one universal 22:00 cutoff to every shift."""
+    if not getattr(settings, "AUTO_CHECKOUT_ENABLED", True):
+        return
     open_rec = (await db.execute(
         select(Attendance).where(
             Attendance.employee_id == employee.id,

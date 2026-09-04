@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     CHECKIN_START_TIME: str = "08:00"
     LATE_AFTER_TIME: str = "09:15"
     AUTO_CHECKOUT_TIME: str = "22:00"
+    AUTO_CHECKOUT_ENABLED: bool = True
     STANDARD_WORKING_HOURS: int = 8
 
     STORAGE_PATH: str = "./storage"
