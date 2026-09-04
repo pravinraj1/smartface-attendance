@@ -306,12 +306,10 @@ export default function Employees() {
           <TextField margin="dense" label="Department" fullWidth size="small" select value={formData.department_id} onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}>
             {departments?.map((dept: Department) => (<MenuItem key={dept.id} value={dept.id}>{dept.name}</MenuItem>))}
           </TextField>
-          {selectedEmployee && (
-            <TextField margin="dense" label="Shift" fullWidth size="small" select value={formData.shift_id} onChange={(e) => setFormData({ ...formData, shift_id: e.target.value })}>
-              <MenuItem value=""><em>No Shift</em></MenuItem>
-              {activeShifts.map((s: Shift) => (<MenuItem key={s.id} value={s.id}>{s.shift_name} ({s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)})</MenuItem>))}
-            </TextField>
-          )}
+          <TextField margin="dense" label="Shift" fullWidth size="small" select value={formData.shift_id} onChange={(e) => setFormData({ ...formData, shift_id: e.target.value })}>
+            <MenuItem value=""><em>No Shift</em></MenuItem>
+            {activeShifts.map((s: Shift) => (<MenuItem key={s.id} value={s.id}>{s.shift_name} ({s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)})</MenuItem>))}
+          </TextField>
           <TextField margin="dense" label="Monthly Salary" fullWidth size="small" type="number" value={formData.monthly_salary} onChange={(e) => setFormData({ ...formData, monthly_salary: e.target.value })} />
           <TextField margin="dense" label="Employment Status" fullWidth size="small" select value={formData.employment_status} onChange={(e) => setFormData({ ...formData, employment_status: e.target.value })}>
             <MenuItem value="ACTIVE">Active</MenuItem>
