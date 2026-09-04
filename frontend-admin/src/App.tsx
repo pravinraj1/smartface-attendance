@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard';
 import Departments from './pages/Departments';
 import Employees from './pages/Employees';
 import Attendance from './pages/Attendance';
+import Shifts from './pages/Shifts';
 import Reports from './pages/Reports';
 import FaceEnrollment from './pages/FaceEnrollment';
 import FaceRecognition from './pages/FaceRecognition';
@@ -154,6 +155,7 @@ function App() {
               <Route path="departments" element={<Departments />} />
               <Route path="employees" element={<Employees />} />
               <Route path="attendance" element={<Attendance />} />
+              <Route path="shifts" element={<Shifts />} />
               <Route path="face-enrollment" element={<FaceEnrollment />} />
               <Route path="face-recognition" element={<FaceRecognition />} />
               <Route path="reports" element={<Reports />} />

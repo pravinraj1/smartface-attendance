@@ -1,5 +1,6 @@
 from app.models.department import Department
 from app.models.employee import Employee
+from app.models.shift import Shift
 from app.models.face_profile import FaceProfile
 from app.models.attendance import Attendance
 from app.models.attendance_log import AttendanceLog
@@ -16,6 +17,7 @@ from app.models.erp_config import ERPConfig, ERPsyncLog
 __all__ = [
     "Department",
     "Employee",
+    "Shift",
     "FaceProfile",
     "Attendance",
     "AttendanceLog",

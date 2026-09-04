@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, departments, employees, attendance, faces, erp, reports, audit
+from app.api.v1 import auth, departments, employees, attendance, faces, erp, reports, audit, shifts
 
 api_router = APIRouter()
 
@@ -11,3 +11,4 @@ api_router.include_router(faces.router)
 api_router.include_router(erp.router)
 api_router.include_router(reports.router)
 api_router.include_router(audit.router)
+api_router.include_router(shifts.router)

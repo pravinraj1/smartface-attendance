@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.attendance import Attendance
 from app.models.attendance_log import AttendanceLog
 from app.models.employee import Employee
+from app.models.shift import Shift
 from app.schemas.attendance import (
     AttendanceResponse,
     AttendanceLogResponse,
@@ -52,7 +53,35 @@ def _parse_time(value: str) -> Optional[time]:
         return None
 
 
-def _compute_late_minutes(check_in_dt: datetime, today: date) -> int:
+def _standard_minutes(shift: Optional[Shift], default_hours=None) -> int:
+    """Standard working duration in minutes for an employee's shift."""
+    hours = default_hours
+    if shift is not None and getattr(shift, "standard_hours", None) is not None:
+        hours = float(shift.standard_hours)
+    if hours is None:
+        hours = settings.STANDARD_WORKING_HOURS
+    return int(hours * 60)
+
+
+def _is_overnight(shift: Optional[Shift], scheduled_start: Optional[time], scheduled_end: Optional[time]) -> bool:
+    """True when a shift crosses midnight (start later than end)."""
+    if scheduled_start is not None and scheduled_end is not None:
+        return scheduled_start > scheduled_end
+    return False
+
+
+def _compute_late_minutes(check_in_dt: datetime, today: date, shift: Optional[Shift] = None,
+                          scheduled_start: Optional[time] = None, scheduled_end: Optional[time] = None) -> int:
+    """Late minutes based on the assigned shift (start + grace). If no shift is
+    assigned, fall back to the global LATE_AFTER_TIME for backward compatibility."""
+    if shift is not None and scheduled_start is not None:
+        threshold = datetime.combine(today, scheduled_start)
+        grace = getattr(shift, "grace_period", 0) or 0
+        threshold += timedelta(minutes=grace)
+        if check_in_dt > threshold:
+            return int((check_in_dt - threshold).total_seconds() // 60)
+        return 0
+
     late_after = _parse_time(settings.LATE_AFTER_TIME)
     if not late_after:
         return 0
@@ -60,6 +89,72 @@ def _compute_late_minutes(check_in_dt: datetime, today: date) -> int:
     if check_in_dt > threshold:
         return int((check_in_dt - threshold).total_seconds() // 60)
     return 0
+
+
+def _compute_ot(shift: Optional[Shift], total_work_minutes: int) -> tuple[int, int]:
+    """Return (normal_work_minutes, overtime_minutes) given the shift standard hours.
+
+    OT = total - standard  (never negative). Normal = total - OT."""
+    total = max(int(total_work_minutes or 0), 0)
+    standard = _standard_minutes(shift)
+    if total <= standard:
+        return total, 0
+    return standard, total - standard
+
+
+def _apply_ot(rec: Attendance, shift: Optional[Shift], check_out_dt: datetime) -> None:
+    if rec.check_in and check_out_dt > rec.check_in:
+        total = int((check_out_dt - rec.check_in).total_seconds() // 60)
+    else:
+        total = 0
+    rec.total_work_minutes = total
+    rec.normal_work_minutes, rec.overtime_minutes = _compute_ot(shift, total)
+
+
+async def _load_shift(db: AsyncSession, shift_id) -> Optional[Shift]:
+    if shift_id is None:
+        return None
+    shift = (await db.execute(select(Shift).where(Shift.id == shift_id))).scalar_one_or_none()
+    return shift
+
+
+async def _maybe_auto_checkout(db: AsyncSession, employee: Employee, now: datetime) -> None:
+    """Shift-aware automatic checkout.
+
+    If the employee has an open attendance record whose scheduled shift window
+    has already ended (based on that shift's end time, or AUTO_CHECKOUT_TIME as a
+    fallback when no shift is assigned), close it now, computing total/normal/OT.
+    This keeps stale open records from blocking the next check-in and prevents
+    blindly applying one universal 22:00 cutoff to every shift."""
+    open_rec = (await db.execute(
+        select(Attendance).where(
+            Attendance.employee_id == employee.id,
+            Attendance.check_out.is_(None),
+        ).order_by(Attendance.check_in.desc())
+    )).scalars().first()
+    if not open_rec:
+        return
+
+    shift = await _load_shift(db, open_rec.shift_id)
+    end_dt: Optional[datetime] = None
+
+    if open_rec.scheduled_end is not None:
+        end_day = open_rec.attendance_date
+        overnight = _is_overnight(shift, open_rec.scheduled_start, open_rec.scheduled_end)
+        if overnight:
+            end_day = end_day + timedelta(days=1)
+        end_dt = datetime.combine(end_day, open_rec.scheduled_end)
+    else:
+        auto = _parse_time(settings.AUTO_CHECKOUT_TIME)
+        if auto:
+            end_dt = datetime.combine(open_rec.attendance_date, auto)
+
+    if end_dt is None or now <= end_dt:
+        return
+
+    open_rec.check_out = end_dt
+    _apply_ot(open_rec, shift, end_dt)
+    db.add(open_rec)
 
 
 def _serialize_attendance(rec: Attendance) -> dict:
@@ -70,9 +165,15 @@ def _serialize_attendance(rec: Attendance) -> dict:
         "id": str(rec.id),
         "employee_id": str(rec.employee_id),
         "date": str(rec.attendance_date),
+        "shift_id": str(rec.shift_id) if rec.shift_id else None,
+        "scheduled_start": rec.scheduled_start.isoformat() if rec.scheduled_start else None,
+        "scheduled_end": rec.scheduled_end.isoformat() if rec.scheduled_end else None,
         "check_in": rec.check_in.isoformat() if rec.check_in else None,
         "check_out": rec.check_out.isoformat() if rec.check_out else None,
         "total_hours": total_hours,
+        "total_work_minutes": rec.total_work_minutes or 0,
+        "normal_work_minutes": rec.normal_work_minutes or 0,
+        "overtime_minutes": rec.overtime_minutes or 0,
         "status": rec.attendance_status or "",
         "late_minutes": rec.late_minutes or 0,
         "remarks": rec.remarks,
@@ -186,12 +287,30 @@ async def get_attendance_stats(
         )
     )
     late = late_today.scalar()
-    
+
+    checked_out_today = await db.execute(
+        select(func.count(Attendance.id)).where(
+            Attendance.attendance_date == today,
+            Attendance.check_out.isnot(None),
+        )
+    )
+    checked_out = checked_out_today.scalar()
+
+    ot_today = await db.execute(
+        select(func.coalesce(func.sum(Attendance.overtime_minutes), 0)).where(
+            Attendance.attendance_date == today,
+        )
+    )
+    ot_minutes = int(ot_today.scalar() or 0)
+
     return {
         "total_employees": total,
         "present_today": present,
         "absent_today": total - present,
         "late_today": late,
+        "checked_out_today": checked_out,
+        "overtime_minutes_today": ot_minutes,
+        "overtime_hours_today": round(ot_minutes / 60, 2),
     }
 
 
@@ -215,7 +334,14 @@ async def check_in(
     
     today = _today_ist()
     now = _now_ist()
-    
+
+    # Shift-aware automatic checkout: close a stale open record first.
+    await _maybe_auto_checkout(db, employee, now)
+
+    shift = await _load_shift(db, employee.shift_id)
+    scheduled_start = shift.start_time if shift else None
+    scheduled_end = shift.end_time if shift else None
+
     existing_attendance = await db.execute(
         select(Attendance).where(
             Attendance.employee_id == emp_id,
@@ -230,13 +356,16 @@ async def check_in(
     if attendance and attendance.check_in:
         raise HTTPException(status_code=400, detail="Already checked in today")
 
-    late_mins = _compute_late_minutes(now, today)
+    late_mins = _compute_late_minutes(now, today, shift, scheduled_start, scheduled_end)
     new_status = "LATE" if late_mins > 0 else "PRESENT"
 
     if not attendance:
         attendance = Attendance(
             employee_id=emp_id,
             attendance_date=today,
+            shift_id=shift.id if shift else None,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
             check_in=now,
             attendance_status=new_status,
             late_minutes=late_mins,
@@ -244,6 +373,9 @@ async def check_in(
         db.add(attendance)
     else:
         attendance.check_in = now
+        attendance.shift_id = shift.id if shift else None
+        attendance.scheduled_start = scheduled_start
+        attendance.scheduled_end = scheduled_end
         attendance.attendance_status = new_status
         attendance.late_minutes = late_mins
     
@@ -284,28 +416,36 @@ async def check_out(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     
-    today = _today_ist()
     now = _now_ist()
-    
-    existing_attendance = await db.execute(
+
+    # Find the employee's OPEN check-in record, regardless of calendar date.
+    # For overnight shifts (22:00 -> 06:00) the checkout occurs on the following
+    # calendar day, so it must match the open record rather than today's date.
+    open_rec = (await db.execute(
         select(Attendance).where(
             Attendance.employee_id == emp_id,
-            Attendance.attendance_date == today,
-        )
-    )
-    attendance = existing_attendance.scalar_one_or_none()
-    
-    if not attendance:
-        raise HTTPException(status_code=400, detail="No check-in record found for today")
-    
-    if attendance.check_out:
-        raise HTTPException(status_code=400, detail="Already checked out today")
-    
+            Attendance.check_out.is_(None),
+        ).order_by(Attendance.check_in.desc())
+    )).scalars().first()
+
+    if not open_rec:
+        today = _today_ist()
+        done_today = (await db.execute(
+            select(Attendance).where(
+                Attendance.employee_id == emp_id,
+                Attendance.attendance_date == today,
+                Attendance.check_out.isnot(None),
+            )
+        )).scalar_one_or_none()
+        if done_today:
+            raise HTTPException(status_code=400, detail="Already checked out today")
+        raise HTTPException(status_code=400, detail="No check-in record found")
+
+    attendance = open_rec
+
+    shift = await _load_shift(db, attendance.shift_id)
     attendance.check_out = now
-    
-    if attendance.check_in:
-        work_duration = now - attendance.check_in
-        attendance.total_work_minutes = int(work_duration.total_seconds() / 60)
+    _apply_ot(attendance, shift, now)
     
     log = AttendanceLog(
         employee_id=emp_id,

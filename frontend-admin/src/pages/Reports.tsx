@@ -44,6 +44,13 @@ function periodRange(period: Period): { start_date?: string; end_date?: string }
   return { start_date: iso(start), end_date: iso(end) };
 }
 
+function fmtMinutes(minutes?: number): string {
+  const m = minutes || 0;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem ? `${h}h ${rem}m` : `${h}h`;
+}
+
 const PERIOD_LABELS: { value: Period; label: string }[] = [
   { value: '', label: 'Custom Range' },
   { value: 'day', label: 'Daily' },
@@ -290,6 +297,9 @@ export default function Reports() {
             <Typography variant="body2" sx={{ color: '#718096', mb: 2 }}>
               {summary?.present_days || 0} present / {summary?.total_absences || 0} absent / {summary?.late_days || 0} late · {((summary?.avg_attendance_rate || 0) * 100).toFixed(1)}%
             </Typography>
+            <Typography variant="body2" sx={{ color: '#2f855a', fontWeight: 600, mb: 2 }}>
+              Total: {fmtMinutes(summary?.total_work_minutes)} · Normal: {fmtMinutes(summary?.total_normal_minutes)} · OT: {fmtMinutes(summary?.total_overtime_minutes)}
+            </Typography>
             <Button
               variant="contained"
               startIcon={<PdfIcon />}
@@ -309,7 +319,7 @@ export default function Reports() {
                   <Box>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>{dept.department_name}</Typography>
                     <Typography variant="caption" sx={{ color: '#718096' }}>
-                      {dept.present_days} present / {dept.absent_days} absent / {dept.late_days} late
+                      {dept.present_days} present / {dept.absent_days} absent / {dept.late_days} late · Work: {fmtMinutes(dept.total_work_minutes)} · OT: {fmtMinutes(dept.total_overtime_minutes)}
                     </Typography>
                   </Box>
                   <Chip label={`${dept.total_employees} employees`} size="small" sx={{ backgroundColor: '#ebf4ff', color: '#2b6cb0', fontWeight: 600, fontSize: '0.7rem' }} />

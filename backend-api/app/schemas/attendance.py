@@ -1,7 +1,7 @@
 import uuid
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
-from datetime import datetime, date
+from datetime import datetime, date, time
 
 
 AttendanceStatus = Literal["PRESENT", "ABSENT", "LATE", "LEAVE", "HOLIDAY", "WEEKEND"]
@@ -11,9 +11,14 @@ EventType = Literal["CHECK_IN", "CHECK_OUT"]
 class AttendanceBase(BaseModel):
     employee_id: uuid.UUID
     attendance_date: date
+    shift_id: Optional[uuid.UUID] = None
+    scheduled_start: Optional[time] = None
+    scheduled_end: Optional[time] = None
     check_in: Optional[datetime] = None
     check_out: Optional[datetime] = None
     total_work_minutes: int = Field(default=0, ge=0)
+    normal_work_minutes: int = Field(default=0, ge=0)
+    overtime_minutes: int = Field(default=0, ge=0)
     attendance_status: Optional[AttendanceStatus] = None
     late_minutes: int = Field(default=0, ge=0)
     early_exit_minutes: int = Field(default=0, ge=0)

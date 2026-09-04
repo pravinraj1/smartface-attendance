@@ -23,7 +23,7 @@ import {
   InputAdornment,
 } from '@mui/material';
 import { Edit as EditIcon, Delete as DeleteIcon, Add as AddIcon, Search as SearchIcon, Upload as UploadIcon } from '@mui/icons-material';
-import { employeeAPI, departmentAPI } from '../services/api';
+import { employeeAPI, departmentAPI, shiftsAPI } from '../services/api';
 
 interface Employee {
   id: string;
@@ -34,11 +34,20 @@ interface Employee {
   monthly_salary: number;
   employment_status: string;
   face_enrolled: boolean;
+  shift_id?: string | null;
 }
 
 interface Department {
   id: string;
   name: string;
+}
+
+interface Shift {
+  id: string;
+  shift_name: string;
+  start_time: string;
+  end_time: string;
+  is_active: boolean;
 }
 
 export default function Employees() {
@@ -54,6 +63,7 @@ export default function Employees() {
     full_name: '',
     mobile_number: '',
     department_id: '',
+    shift_id: '',
     monthly_salary: '',
     employment_status: 'ACTIVE',
   });
@@ -67,6 +77,19 @@ export default function Employees() {
   const { data: departments } = useQuery({
     queryKey: ['departments'],
     queryFn: () => departmentAPI.getAll().then((res) => res.data),
+  });
+
+  const { data: shifts} = useQuery({
+    queryKey: ['shifts'],
+    queryFn: () => shiftsAPI.getAll().then((res) => res.data),
+  });
+  const activeShifts = Array.isArray(shifts)
+    ? (shifts as Shift[]).filter((s) => s.is_active)
+    : [];
+
+  const assignMutation = useMutation({
+    mutationFn: ({ id, shiftId }: { id: string; shiftId: string | null }) => shiftsAPI.assign(id, shiftId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['employees'] }),
   });
 
   const createMutation = useMutation({
@@ -122,12 +145,13 @@ export default function Employees() {
         full_name: employee.full_name,
         mobile_number: employee.mobile_number || '',
         department_id: employee.department_id || '',
+        shift_id: employee.shift_id || '',
         monthly_salary: employee.monthly_salary?.toString() || '',
         employment_status: employee.employment_status,
       });
     } else {
       setSelectedEmployee(null);
-      setFormData({ employee_code: '', full_name: '', mobile_number: '', department_id: '', monthly_salary: '', employment_status: 'ACTIVE' });
+      setFormData({ employee_code: '', full_name: '', mobile_number: '', department_id: '', shift_id: '', monthly_salary: '', employment_status: 'ACTIVE' });
     }
     setOpen(true);
   };
@@ -136,7 +160,12 @@ export default function Employees() {
 
   const handleSubmit = () => {
     const data = { ...formData, monthly_salary: formData.monthly_salary ? parseFloat(formData.monthly_salary) : null };
-    if (selectedEmployee) { updateMutation.mutate({ id: selectedEmployee.id, data }); }
+    if (selectedEmployee) {
+      updateMutation.mutate({ id: selectedEmployee.id, data });
+      if ((formData.shift_id || '') !== (selectedEmployee.shift_id || '')) {
+        assignMutation.mutate({ id: selectedEmployee.id, shiftId: formData.shift_id || null });
+      }
+    }
     else { createMutation.mutate(data); }
   };
 
@@ -205,6 +234,7 @@ export default function Employees() {
               <TableCell>Name</TableCell>
               <TableCell>Mobile</TableCell>
               <TableCell>Department</TableCell>
+              <TableCell>Shift</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Face</TableCell>
               <TableCell align="right">Actions</TableCell>
@@ -226,6 +256,20 @@ export default function Employees() {
                   <TableCell>{emp.mobile_number || '-'}</TableCell>
                   <TableCell>
                     {departments?.find((d: Department) => d.id === emp.department_id)?.name || '-'}
+                  </TableCell>
+                  <TableCell>
+                    {(() => {
+                      const s = (activeShifts.length ? shifts as Shift[] : []).find((sh) => sh.id === emp.shift_id);
+                      if (!s) return <Typography variant="body2" sx={{ color: '#a0aec0' }}>No Shift</Typography>;
+                      return (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          <Chip label={s.shift_name} size="small" sx={{ backgroundColor: '#ebf4ff', color: '#2b6cb0', fontWeight: 600, fontSize: '0.68rem' }} />
+                          <Typography variant="caption" sx={{ color: '#718096' }}>
+                            {s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)}
+                          </Typography>
+                        </Box>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell>
                     <Chip label={emp.employment_status} size="small" sx={{ backgroundColor: st.bg, color: st.color, fontWeight: 600, fontSize: '0.7rem' }} />
@@ -262,6 +306,12 @@ export default function Employees() {
           <TextField margin="dense" label="Department" fullWidth size="small" select value={formData.department_id} onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}>
             {departments?.map((dept: Department) => (<MenuItem key={dept.id} value={dept.id}>{dept.name}</MenuItem>))}
           </TextField>
+          {selectedEmployee && (
+            <TextField margin="dense" label="Shift" fullWidth size="small" select value={formData.shift_id} onChange={(e) => setFormData({ ...formData, shift_id: e.target.value })}>
+              <MenuItem value=""><em>No Shift</em></MenuItem>
+              {activeShifts.map((s: Shift) => (<MenuItem key={s.id} value={s.id}>{s.shift_name} ({s.start_time?.slice(0, 5)}–{s.end_time?.slice(0, 5)})</MenuItem>))}
+            </TextField>
+          )}
           <TextField margin="dense" label="Monthly Salary" fullWidth size="small" type="number" value={formData.monthly_salary} onChange={(e) => setFormData({ ...formData, monthly_salary: e.target.value })} />
           <TextField margin="dense" label="Employment Status" fullWidth size="small" select value={formData.employment_status} onChange={(e) => setFormData({ ...formData, employment_status: e.target.value })}>
             <MenuItem value="ACTIVE">Active</MenuItem>

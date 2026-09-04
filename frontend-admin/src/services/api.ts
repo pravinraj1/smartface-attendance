@@ -60,6 +60,30 @@ export const employeeAPI = {
   delete: (id: string) => api.delete(`/employees/${id}`),
 };
 
+export const shiftsAPI = {
+  getAll: (params?: { is_active?: boolean }) => api.get('/shifts', { params }),
+  getById: (id: string) => api.get(`/shifts/${id}`),
+  create: (data: {
+    shift_name: string;
+    start_time: string;
+    end_time: string;
+    standard_hours?: number;
+    grace_period?: number;
+    is_active?: boolean;
+  }) => api.post('/shifts', data),
+  update: (id: string, data: {
+    shift_name?: string;
+    start_time?: string;
+    end_time?: string;
+    standard_hours?: number;
+    grace_period?: number;
+    is_active?: boolean;
+  }) => api.put(`/shifts/${id}`, data),
+  delete: (id: string) => api.delete(`/shifts/${id}`),
+  assign: (employeeId: string, shiftId: string | null) =>
+    api.put(`/employees/${employeeId}/shift`, { shift_id: shiftId }),
+};
+
 export const attendanceAPI = {
   getAll: (params?: { skip?: number; limit?: number; employee_id?: string; start_date?: string; end_date?: string }) =>
     api.get('/attendance', { params }),

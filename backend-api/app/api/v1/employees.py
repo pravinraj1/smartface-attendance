@@ -15,6 +15,8 @@ from app.schemas.employee import (
     EmployeeListResponse,
 )
 from app.services.audit import record_audit
+from app.schemas.shift import AssignShiftRequest
+from app.models.shift import Shift
 from pydantic import BaseModel, conlist
 
 router = APIRouter(prefix="/employees", tags=["Employees"])
@@ -236,6 +238,41 @@ async def update_employee(
             "employment_status": employee.employment_status,
             **update_data,
         },
+    )
+    await db.commit()
+    return employee
+
+
+@router.put("/{employee_id}/shift", response_model=EmployeeResponse)
+async def assign_employee_shift(
+    employee_id: uuid.UUID,
+    data: AssignShiftRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    result = await db.execute(select(Employee).where(Employee.id == employee_id))
+    employee = result.scalar_one_or_none()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if data.shift_id:
+        shift = (await db.execute(select(Shift).where(Shift.id == data.shift_id))).scalar_one_or_none()
+        if not shift:
+            raise HTTPException(status_code=404, detail="Shift not found")
+        if not shift.is_active:
+            raise HTTPException(status_code=400, detail="Shift is disabled")
+
+    employee.shift_id = data.shift_id
+    await db.commit()
+    await db.refresh(employee)
+    await record_audit(
+        db,
+        user_id=current_user.id,
+        action="ASSIGN_SHIFT",
+        entity_name="employee",
+        entity_id=employee.id,
+        old_value={"employee_code": employee.employee_code},
+        new_value={"shift_id": str(data.shift_id) if data.shift_id else None},
     )
     await db.commit()
     return employee

@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.attendance import Attendance
 from app.models.employee import Employee
 from app.models.department import Department
+from app.models.shift import Shift
 from app.services.report_pdf import build_table_pdf, minutes_to_hours
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -114,6 +115,17 @@ async def _resolve_employees(db, emp_ids) -> dict:
     return {e.id: e for e in res.scalars().all()}
 
 
+async def _resolve_shifts(db) -> dict:
+    res = await db.execute(select(Shift))
+    return {s.id: s for s in res.scalars().all()}
+
+
+def _fmt_time_iso(iso: Optional[str]) -> str:
+    if not iso:
+        return "-"
+    return iso[11:16]
+
+
 @router.get("/summary")
 async def report_summary(
     period: Optional[str] = Query(None, pattern="^(day|week|month)$"),
@@ -182,12 +194,16 @@ async def report_summary(
         d_present = sum(1 for r in d_records if r.check_in is not None)
         d_late = sum(1 for r in d_records if (r.late_minutes or 0) > 0)
         d_absent = max(len(dept_emp_ids) * total_working_days - d_present, 0)
+        d_work = sum(r.total_work_minutes or 0 for r in d_records)
+        d_ot = sum(r.overtime_minutes or 0 for r in d_records)
         department_summary.append({
             "department_id": str(dept.id),
             "department_name": dept.name,
             "present_days": d_present,
             "absent_days": d_absent,
             "late_days": d_late,
+            "total_work_minutes": d_work,
+            "total_overtime_minutes": d_ot,
             "total_employees": len(dept_emp_ids),
         })
 
@@ -199,6 +215,8 @@ async def report_summary(
         "total_employees": eff_total_employees,
         "present_days": present,
         "late_days": late,
+        "total_work_minutes": sum(r.total_work_minutes or 0 for r in records),
+        "total_overtime_minutes": sum(r.overtime_minutes or 0 for r in records),
         "department_summary": department_summary,
     }
 
@@ -209,6 +227,8 @@ async def report_summary(
             "present_days": d["present_days"],
             "absent_days": d["absent_days"],
             "late_days": d["late_days"],
+            "total_work_hours": minutes_to_hours(d["total_work_minutes"]),
+            "total_overtime_hours": minutes_to_hours(d["total_overtime_minutes"]),
         } for d in department_summary]
         rows.append({
             "department_name": "ALL",
@@ -216,6 +236,8 @@ async def report_summary(
             "present_days": present,
             "absent_days": total_absences,
             "late_days": late,
+            "total_work_hours": minutes_to_hours(data["total_work_minutes"]),
+            "total_overtime_hours": minutes_to_hours(data["total_overtime_minutes"]),
         })
         return _csv_response(rows, "attendance_summary.csv")
 
@@ -227,15 +249,19 @@ async def report_summary(
             ("Present", str(present)),
             ("Absent", str(total_absences)),
             ("Late", str(late)),
+            ("Total Working", minutes_to_hours(data["total_work_minutes"])),
+            ("Total OT", minutes_to_hours(data["total_overtime_minutes"])),
             ("Attendance Rate", f"{round(avg_attendance_rate * 100, 1)}%"),
         ]
-        cols = ["Department", "Employees", "Present", "Absent", "Late"]
+        cols = ["Department", "Employees", "Present", "Absent", "Late", "Work", "OT"]
         pdf_rows = [
             [d["department_name"], str(d["total_employees"]), str(d["present_days"]),
-             str(d["absent_days"]), str(d["late_days"])]
+             str(d["absent_days"]), str(d["late_days"]),
+             minutes_to_hours(d["total_work_minutes"]), minutes_to_hours(d["total_overtime_minutes"])]
             for d in department_summary
         ]
-        pdf_rows.append(["ALL", str(eff_total_employees), str(present), str(total_absences), str(late)])
+        pdf_rows.append(["ALL", str(eff_total_employees), str(present), str(total_absences), str(late),
+                         minutes_to_hours(data["total_work_minutes"]), minutes_to_hours(data["total_overtime_minutes"])])
         pdf = build_table_pdf(
             _period_label(period, start_date, end_date) or "Attendance Summary",
             "Department-wise attendance summary",
@@ -271,14 +297,25 @@ async def report_employee(
     present = sum(1 for r in records if r.check_in is not None)
     late = sum(1 for r in records if (r.late_minutes or 0) > 0)
     total_work_minutes = sum(r.total_work_minutes or 0 for r in records)
+    total_normal_minutes = sum(r.normal_work_minutes or 0 for r in records)
+    total_overtime_minutes = sum(r.overtime_minutes or 0 for r in records)
     days = len(records)
+
+    shifts = await _resolve_shifts(db)
+    employee_shift = shifts.get(employee.shift_id)
+    shift_label = f"{employee_shift.shift_name} ({employee_shift.start_time:%H:%M} - {employee_shift.end_time:%H:%M})" if employee_shift else "No Shift"
 
     records_payload = [
         {
             "date": str(r.attendance_date),
+            "shift": shifts.get(r.shift_id).shift_name if r.shift_id and shifts.get(r.shift_id) else None,
+            "shift_start": r.scheduled_start.strftime("%H:%M") if r.scheduled_start else None,
+            "shift_end": r.scheduled_end.strftime("%H:%M") if r.scheduled_end else None,
             "check_in": r.check_in.isoformat() if r.check_in else None,
             "check_out": r.check_out.isoformat() if r.check_out else None,
             "work_minutes": r.total_work_minutes or 0,
+            "normal_work_minutes": r.normal_work_minutes or 0,
+            "overtime_minutes": r.overtime_minutes or 0,
             "status": r.attendance_status or "",
             "late_minutes": r.late_minutes or 0,
         }
@@ -289,39 +326,65 @@ async def report_employee(
         rows = [{
             "employee_code": employee.employee_code,
             "employee_name": employee.full_name,
-            **rc,
+            "date": rc["date"],
+            "shift": rc["shift"] if rc["shift"] else "No Shift",
+            "shift_start": rc["shift_start"] if rc["shift_start"] else "",
+            "shift_end": rc["shift_end"] if rc["shift_end"] else "",
+            "check_in": rc["check_in"],
+            "check_out": rc["check_out"],
+            "total_work_hours": minutes_to_hours(rc["work_minutes"]),
+            "normal_work_hours": minutes_to_hours(rc["normal_work_minutes"]),
+            "ot_hours": minutes_to_hours(rc["overtime_minutes"]),
+            "status": rc["status"],
+            "late_minutes": rc["late_minutes"],
         } for rc in records_payload]
+        rows.append({
+            "employee_code": employee.employee_code,
+            "employee_name": f"TOTAL ({shift_label})",
+            "date": "",
+            "shift": "",
+            "shift_start": "",
+            "shift_end": "",
+            "check_in": "",
+            "check_out": "",
+            "total_work_hours": minutes_to_hours(total_work_minutes),
+            "normal_work_hours": minutes_to_hours(total_normal_minutes),
+            "ot_hours": minutes_to_hours(total_overtime_minutes),
+            "status": "",
+            "late_minutes": "",
+        })
         return _csv_response(rows, f"employee_report_{employee.employee_code}.csv")
 
     if format == "pdf":
         summary_block = [
             ("Employee", f"{employee.full_name} ({employee.employee_code})"),
+            ("Shift", shift_label),
             ("Period", _period_label(period, start_date, end_date)),
             ("Working Days", str(days)),
             ("Present", str(present)),
             ("Absent", str(max(days - present, 0))),
             ("Late", str(late)),
+            ("Normal Hours", minutes_to_hours(total_normal_minutes)),
+            ("Total OT", minutes_to_hours(total_overtime_minutes)),
             ("Total Hours", minutes_to_hours(total_work_minutes)),
             ("Attendance Rate", f"{round(present / days * 100, 1) if days else 0}%"),
         ]
-        def _fmt_time(iso: Optional[str]) -> str:
-            if not iso:
-                return "-"
-            t = iso[11:16]
-            return t
-        cols = ["Date", "Check In", "Check Out", "Hours", "Status", "Late (min)"]
+        cols = ["Date", "Shift", "Check In", "Check Out", "Hours", "Normal", "OT", "Status", "Late (min)"]
         pdf_rows = [
-            [rc["date"], _fmt_time(rc["check_in"]), _fmt_time(rc["check_out"]),
-             minutes_to_hours(rc["work_minutes"]), rc["status"] or "-", str(rc["late_minutes"] or 0)]
+            [rc["date"], rc["shift"] if rc["shift"] else "-",
+             _fmt_time_iso(rc["check_in"]), _fmt_time_iso(rc["check_out"]),
+             minutes_to_hours(rc["work_minutes"]), minutes_to_hours(rc["normal_work_minutes"]),
+             minutes_to_hours(rc["overtime_minutes"]), rc["status"] or "-", str(rc["late_minutes"] or 0)]
             for rc in records_payload
         ]
         if not pdf_rows:
-            pdf_rows = [["No attendance records in this period", "-", "-", "-", "-", "-"]]
+            pdf_rows = [["No attendance records in this period", "-", "-", "-", "-", "-", "-", "-", "-"]]
         pdf = build_table_pdf(
             _period_label(period, start_date, end_date) or "Employee Report",
-            f"{employee.full_name} ({employee.employee_code})",
+            f"{employee.full_name} ({employee.employee_code}) - {shift_label}",
             cols, pdf_rows,
             summary_block=summary_block,
+            landscape_page=True,
         )
         return _pdf_response(pdf, f"employee_report_{employee.employee_code}.pdf")
 
@@ -329,11 +392,15 @@ async def report_employee(
         "employee_id": employee_id,
         "employee_name": employee.full_name,
         "employee_code": employee.employee_code,
+        "shift_id": str(employee.shift_id) if employee.shift_id else None,
+        "shift": shift_label,
         "total_days": days,
         "present_days": present,
         "absent_days": max(days - present, 0),
         "late_days": late,
         "total_work_minutes": total_work_minutes,
+        "total_normal_minutes": total_normal_minutes,
+        "total_overtime_minutes": total_overtime_minutes,
         "attendance_rate": round(present / days, 4) if days else 0.0,
         "records": records_payload,
     }
@@ -391,8 +458,12 @@ async def report_department(
     late = sum(1 for r in records if (r.late_minutes or 0) > 0)
     days = len({r.attendance_date for r in records})
     total_slots = max(len(emp_ids) * days, 1)
+    total_work_minutes = sum(r.total_work_minutes or 0 for r in records)
+    total_normal_minutes = sum(r.normal_work_minutes or 0 for r in records)
+    total_overtime_minutes = sum(r.overtime_minutes or 0 for r in records)
 
     employees = await _resolve_employees(db, emp_ids)
+    shifts = await _resolve_shifts(db)
 
     records_payload = [
         {
@@ -400,23 +471,47 @@ async def report_department(
             "employee_code": employees.get(r.employee_id).employee_code if employees.get(r.employee_id) else None,
             "employee_name": employees.get(r.employee_id).full_name if employees.get(r.employee_id) else None,
             "date": str(r.attendance_date),
+            "shift": shifts.get(r.shift_id).shift_name if r.shift_id and shifts.get(r.shift_id) else None,
             "check_in": r.check_in.isoformat() if r.check_in else None,
             "check_out": r.check_out.isoformat() if r.check_out else None,
             "work_minutes": r.total_work_minutes or 0,
+            "normal_work_minutes": r.normal_work_minutes or 0,
+            "overtime_minutes": r.overtime_minutes or 0,
             "status": r.attendance_status or "",
         }
         for r in records
     ]
 
     if format == "csv":
-        rows = [{k: v for k, v in rc.items() if k != "employee_id"} for rc in records_payload]
+        rows = []
+        for rc in records_payload:
+            rows.append({
+                "employee_code": rc.get("employee_code"),
+                "employee_name": rc.get("employee_name"),
+                "date": rc["date"],
+                "shift": rc["shift"] if rc["shift"] else "",
+                "check_in": rc["check_in"],
+                "check_out": rc["check_out"],
+                "total_work_hours": minutes_to_hours(rc["work_minutes"]),
+                "normal_work_hours": minutes_to_hours(rc["normal_work_minutes"]),
+                "ot_hours": minutes_to_hours(rc["overtime_minutes"]),
+                "status": rc["status"],
+            })
+        rows.append({
+            "employee_code": "",
+            "employee_name": "DEPARTMENT TOTAL",
+            "date": "",
+            "shift": "",
+            "check_in": "",
+            "check_out": "",
+            "total_work_hours": minutes_to_hours(total_work_minutes),
+            "normal_work_hours": minutes_to_hours(total_normal_minutes),
+            "ot_hours": minutes_to_hours(total_overtime_minutes),
+            "status": "",
+        })
         return _csv_response(rows, f"department_report_{department.name}.csv")
 
     if format == "pdf":
-        def _fmt_time(iso: Optional[str]) -> str:
-            if not iso:
-                return "-"
-            return iso[11:16]
         summary_block = [
             ("Department", department.name),
             ("Period", _period_label(period, start_date, end_date)),
@@ -424,17 +519,24 @@ async def report_department(
             ("Present", str(present)),
             ("Absent", str(max(total_slots - present, 0))),
             ("Late", str(late)),
+            ("Total Work", minutes_to_hours(total_work_minutes)),
+            ("Total OT", minutes_to_hours(total_overtime_minutes)),
             ("Attendance Rate", f"{round(present / total_slots * 100, 1) if total_slots else 0}%"),
         ]
-        cols = ["Employee", "Code", "Date", "In", "Out", "Hours", "Status"]
+        cols = ["Employee", "Code", "Date", "Shift", "In", "Out", "Hours", "Normal", "OT", "Status"]
         pdf_rows = [
             [rc["employee_name"] or "-", rc["employee_code"] or "-", rc["date"],
-             _fmt_time(rc["check_in"]), _fmt_time(rc["check_out"]),
-             minutes_to_hours(rc["work_minutes"]), rc["status"] or "-"]
+             rc["shift"] if rc["shift"] else "-",
+             _fmt_time_iso(rc["check_in"]), _fmt_time_iso(rc["check_out"]),
+             minutes_to_hours(rc["work_minutes"]), minutes_to_hours(rc["normal_work_minutes"]),
+             minutes_to_hours(rc["overtime_minutes"]), rc["status"] or "-"]
             for rc in records_payload
         ]
+        pdf_rows.append(["DEPARTMENT TOTAL", "", "", "", "", "",
+                         minutes_to_hours(total_work_minutes), minutes_to_hours(total_normal_minutes),
+                         minutes_to_hours(total_overtime_minutes), ""])
         if not pdf_rows:
-            pdf_rows = [["No attendance records in this period", "-", "-", "-", "-", "-", "-"]]
+            pdf_rows = [["No attendance records in this period", "-", "-", "-", "-", "-", "-", "-", "-", "-"]]
         pdf = build_table_pdf(
             _period_label(period, start_date, end_date) or "Department Report",
             department.name,
@@ -451,6 +553,9 @@ async def report_department(
         "present_days": present,
         "absent_days": max(total_slots - present, 0),
         "late_days": late,
+        "total_work_minutes": total_work_minutes,
+        "total_normal_minutes": total_normal_minutes,
+        "total_overtime_minutes": total_overtime_minutes,
         "attendance_rate": round(present / total_slots, 4) if total_slots else 0.0,
         "records": records_payload,
     }

@@ -12,6 +12,7 @@ class Employee(Base):
     full_name = Column(String(255), nullable=False)
     mobile_number = Column(String(20), unique=True)
     department_id = Column(UUID(as_uuid=True), ForeignKey("departments.id"))
+    shift_id = Column(UUID(as_uuid=True), ForeignKey("shifts.id"))
     monthly_salary = Column(Numeric(12, 2))
     joining_date = Column(Date)
     employment_status = Column(String(20), default="ACTIVE")

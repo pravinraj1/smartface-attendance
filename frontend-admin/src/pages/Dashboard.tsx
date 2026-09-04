@@ -18,6 +18,8 @@ import {
   AccessTime as AccessTimeIcon,
   Warning as WarningIcon,
   CheckCircle as CheckCircleIcon,
+  EventAvailable as EventAvailableIcon,
+  Timer as TimerIcon,
   Login as LoginIcon,
   Logout as LogoutIcon,
 } from '@mui/icons-material';
@@ -131,6 +133,24 @@ export default function Dashboard() {
             icon={<AccessTimeIcon />}
             color="#c05621"
             bgColor="#fffaf0"
+          />
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+          <StatCard
+            title="Checked Out"
+            value={stats?.checked_out_today || 0}
+            icon={<EventAvailableIcon />}
+            color="#3182ce"
+            bgColor="#e6f6ff"
+          />
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+          <StatCard
+            title="OT Today (hrs)"
+            value={stats?.overtime_hours_today || 0}
+            icon={<TimerIcon />}
+            color="#805ad5"
+            bgColor="#f3e8ff"
           />
         </Grid>
       </Grid>
